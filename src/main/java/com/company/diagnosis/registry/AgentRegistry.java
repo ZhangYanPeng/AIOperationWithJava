@@ -1,9 +1,14 @@
 package com.company.diagnosis.registry;
 
 import com.company.diagnosis.agent.base.BaseIntelligentAgent;
+import com.company.diagnosis.model.config.AgentConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 智能体注册表
@@ -26,11 +31,25 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class AgentRegistry {
 
+    private static final Logger logger = LoggerFactory.getLogger(AgentRegistry.class);
+
     /**
      * 存储所有已注册的智能体
      * key: 智能体名称, value: 智能体实例
      */
     private final ConcurrentHashMap<String, BaseIntelligentAgent> agents = new ConcurrentHashMap<>();
+    
+    /**
+     * 存储智能体配置
+     * key: 智能体名称, value: 智能体配置
+     */
+    private final ConcurrentHashMap<String, AgentConfig> agentConfigs = new ConcurrentHashMap<>();
+    
+    /**
+     * 存储层级到智能体的映射
+     * key: 层级编号, value: 智能体名称列表
+     */
+    private final ConcurrentHashMap<Integer, List<String>> layerAgentMapping = new ConcurrentHashMap<>();
 
     /**
      * 注册智能体
@@ -42,12 +61,43 @@ public class AgentRegistry {
      * @param agent 智能体实例
      */
     public void registerAgent(String name, BaseIntelligentAgent agent) {
-        // TODO: 待实现
-        // 1. 验证名称和实例
-        // 2. 检查是否已存在
-        // 3. 存储到agents Map
-        // 4. 记录注册日志
-        return;
+        if (name == null || name.isEmpty()) {
+            logger.warn("注册智能体失败：名称为空");
+            return;
+        }
+        if (agent == null) {
+            logger.warn("注册智能体失败：实例为空，名称={}", name);
+            return;
+        }
+        
+        if (agents.containsKey(name)) {
+            logger.warn("智能体已存在，将被覆盖：{}", name);
+        }
+        
+        agents.put(name, agent);
+        logger.info("智能体注册成功：{}", name);
+    }
+    
+    /**
+     * 注册智能体及其配置
+     *
+     * @param name 智能体名称
+     * @param agent 智能体实例
+     * @param config 智能体配置
+     */
+    public void registerAgent(String name, BaseIntelligentAgent agent, AgentConfig config) {
+        registerAgent(name, agent);
+        
+        if (config != null) {
+            agentConfigs.put(name, config);
+            
+            // 更新层级映射
+            if (config.getLayer() != null) {
+                layerAgentMapping
+                    .computeIfAbsent(config.getLayer(), k -> Collections.synchronizedList(new ArrayList<>()))
+                    .add(name);
+            }
+        }
     }
 
     /**
@@ -60,12 +110,27 @@ public class AgentRegistry {
      * @return 是否注销成功
      */
     public Boolean unregisterAgent(String name) {
-        // TODO: 待实现
-        // 1. 从agents Map移除
-        // 2. 清理相关资源
-        // 3. 记录注销日志
-        // 4. 返回是否成功
-        return null;
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        
+        BaseIntelligentAgent removed = agents.remove(name);
+        AgentConfig config = agentConfigs.remove(name);
+        
+        // 从层级映射中移除
+        if (config != null && config.getLayer() != null) {
+            List<String> layerAgents = layerAgentMapping.get(config.getLayer());
+            if (layerAgents != null) {
+                layerAgents.remove(name);
+            }
+        }
+        
+        if (removed != null) {
+            logger.info("智能体注销成功：{}", name);
+            return true;
+        }
+        
+        return false;
     }
 
     /**
@@ -78,11 +143,23 @@ public class AgentRegistry {
      * @return 智能体实例，如果不存在返回null
      */
     public BaseIntelligentAgent getAgent(String name) {
-        // TODO: 待实现
-        // 1. 从agents Map获取
-        // 2. 如果不存在，尝试动态加载
-        // 3. 返回实例
-        return null;
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        return agents.get(name);
+    }
+    
+    /**
+     * 获取智能体配置
+     *
+     * @param name 智能体名称
+     * @return 智能体配置
+     */
+    public AgentConfig getAgentConfig(String name) {
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        return agentConfigs.get(name);
     }
 
     /**
@@ -95,10 +172,7 @@ public class AgentRegistry {
      * @return 是否已注册
      */
     public Boolean isRegistered(String name) {
-        // TODO: 待实现
-        // 1. 检查agents Map中是否存在
-        // 2. 返回结果
-        return null;
+        return name != null && agents.containsKey(name);
     }
 
     /**
@@ -109,12 +183,8 @@ public class AgentRegistry {
      *
      * @return 智能体名称列表
      */
-    public java.util.List<String> getAllAgentNames() {
-        // TODO: 待实现
-        // 1. 获取agents Map的keySet
-        // 2. 转换为List
-        // 3. 返回列表
-        return null;
+    public List<String> getAllAgentNames() {
+        return new ArrayList<>(agents.keySet());
     }
 
     /**
@@ -126,12 +196,48 @@ public class AgentRegistry {
      * @param layer 层级编号
      * @return 该层级的智能体列表
      */
-    public java.util.List<BaseIntelligentAgent> getAgentsByLayer(Integer layer) {
-        // TODO: 待实现
-        // 1. 遍历所有agents
-        // 2. 筛选指定层级的智能体
-        // 3. 返回列表
-        return null;
+    public List<BaseIntelligentAgent> getAgentsByLayer(Integer layer) {
+        if (layer == null) {
+            return Collections.emptyList();
+        }
+        
+        List<String> agentNames = layerAgentMapping.get(layer);
+        if (agentNames == null || agentNames.isEmpty()) {
+            // 从配置中查找
+            return agents.values().stream()
+                    .filter(agent -> {
+                        AgentConfig config = agentConfigs.get(getAgentName(agent));
+                        return config != null && layer.equals(config.getLayer());
+                    })
+                    .collect(Collectors.toList());
+        }
+        
+        return agentNames.stream()
+                .map(agents::get)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * 获取指定层级的智能体名称列表
+     *
+     * @param layer 层级编号
+     * @return 智能体名称列表
+     */
+    public List<String> getAgentNamesByLayer(Integer layer) {
+        if (layer == null) {
+            return Collections.emptyList();
+        }
+        
+        List<String> names = layerAgentMapping.get(layer);
+        if (names != null) {
+            return new ArrayList<>(names);
+        }
+        
+        return agentConfigs.entrySet().stream()
+                .filter(entry -> layer.equals(entry.getValue().getLayer()))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
     }
 
     /**
@@ -141,11 +247,10 @@ public class AgentRegistry {
      * 清空所有已注册的智能体
      */
     public void clear() {
-        // TODO: 待实现
-        // 1. 遍历所有agents
-        // 2. 依次清理资源
-        // 3. 清空agents Map
-        return;
+        agents.clear();
+        agentConfigs.clear();
+        layerAgentMapping.clear();
+        logger.info("智能体注册表已清空");
     }
 
     /**
@@ -156,12 +261,52 @@ public class AgentRegistry {
      *
      * @return 统计信息Map
      */
-    public java.util.Map<String, Object> getStatistics() {
-        // TODO: 待实现
-        // 1. 统计总数量
-        // 2. 统计各层级数量
-        // 3. 统计各类型数量
-        // 4. 返回统计信息
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        
+        // 总数量
+        stats.put("totalAgents", agents.size());
+        
+        // 各层级数量
+        Map<Integer, Integer> layerCounts = new HashMap<>();
+        for (Map.Entry<Integer, List<String>> entry : layerAgentMapping.entrySet()) {
+            layerCounts.put(entry.getKey(), entry.getValue().size());
+        }
+        stats.put("agentsByLayer", layerCounts);
+        
+        // 智能体名称列表
+        stats.put("agentNames", getAllAgentNames());
+        
+        return stats;
+    }
+    
+    /**
+     * 获取所有智能体实例
+     *
+     * @return 智能体实例集合
+     */
+    public Collection<BaseIntelligentAgent> getAllAgents() {
+        return agents.values();
+    }
+    
+    /**
+     * 获取智能体数量
+     *
+     * @return 智能体数量
+     */
+    public int getAgentCount() {
+        return agents.size();
+    }
+    
+    /**
+     * 根据智能体实例获取名称
+     */
+    private String getAgentName(BaseIntelligentAgent agent) {
+        for (Map.Entry<String, BaseIntelligentAgent> entry : agents.entrySet()) {
+            if (entry.getValue() == agent) {
+                return entry.getKey();
+            }
+        }
         return null;
     }
 }

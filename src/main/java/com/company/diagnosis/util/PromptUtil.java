@@ -1,6 +1,18 @@
 package com.company.diagnosis.util;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.io.ClassPathResource;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * 提示词工具类
@@ -22,6 +34,18 @@ import java.util.Map;
  */
 public class PromptUtil {
 
+    private static final Logger logger = LoggerFactory.getLogger(PromptUtil.class);
+    
+    /**
+     * 模板缓存
+     */
+    private static final Map<String, String> templateCache = new ConcurrentHashMap<>();
+    
+    /**
+     * 占位符模式: ${variableName}
+     */
+    private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\$\\{([^}]+)}");
+
     /**
      * 加载提示词模板
      * <p>
@@ -32,12 +56,34 @@ public class PromptUtil {
      * @return 提示词模板内容
      */
     public static String loadPromptTemplate(String templateName) {
-        // TODO: 待实现
-        // 1. 构建模板文件路径
-        // 2. 从resources/prompts目录加载文件
-        // 3. 读取文件内容
-        // 4. 返回模板内容
-        return null;
+        if (templateName == null || templateName.isEmpty()) {
+            return null;
+        }
+        
+        // 先检查缓存
+        String cached = templateCache.get(templateName);
+        if (cached != null) {
+            return cached;
+        }
+        
+        // 构建资源路径
+        String resourcePath = "prompts/" + templateName;
+        if (!resourcePath.endsWith(".txt")) {
+            resourcePath += ".txt";
+        }
+        
+        try {
+            ClassPathResource resource = new ClassPathResource(resourcePath);
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
+                String content = reader.lines().collect(Collectors.joining("\n"));
+                templateCache.put(templateName, content);
+                return content;
+            }
+        } catch (IOException e) {
+            logger.warn("加载提示词模板失败: {}, 错误: {}", templateName, e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -51,11 +97,25 @@ public class PromptUtil {
      * @return 替换后的提示词
      */
     public static String replaceVariables(String template, Map<String, Object> variables) {
-        // TODO: 待实现
-        // 1. 遍历variables
-        // 2. 查找并替换模板中的占位符（如${variableName}）
-        // 3. 返回替换后的内容
-        return null;
+        if (template == null || template.isEmpty()) {
+            return template;
+        }
+        if (variables == null || variables.isEmpty()) {
+            return template;
+        }
+        
+        StringBuffer result = new StringBuffer();
+        Matcher matcher = PLACEHOLDER_PATTERN.matcher(template);
+        
+        while (matcher.find()) {
+            String variableName = matcher.group(1);
+            Object value = variables.get(variableName);
+            String replacement = value != null ? String.valueOf(value) : "";
+            matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(result);
+        
+        return result.toString();
     }
 
     /**
@@ -69,11 +129,20 @@ public class PromptUtil {
      * @return 系统提示词
      */
     public static String buildSystemPrompt(String agentType, Map<String, Object> context) {
-        // TODO: 待实现
-        // 1. 加载对应类型的系统提示词模板
-        // 2. 替换模板中的变量
-        // 3. 返回完整的系统提示词
-        return null;
+        String templatePath = agentType + "/system-prompt";
+        String template = loadPromptTemplate(templatePath);
+        
+        if (template == null) {
+            // 尝试加载通用系统提示词
+            template = loadPromptTemplate("common/system-prompt");
+        }
+        
+        if (template == null) {
+            logger.warn("未找到系统提示词模板: {}", agentType);
+            return "";
+        }
+        
+        return replaceVariables(template, context);
     }
 
     /**
@@ -87,11 +156,14 @@ public class PromptUtil {
      * @return 用户提示词
      */
     public static String buildUserPrompt(String taskType, Map<String, Object> parameters) {
-        // TODO: 待实现
-        // 1. 加载任务类型对应的用户提示词模板
-        // 2. 替换模板中的参数
-        // 3. 返回用户提示词
-        return null;
+        String template = loadPromptTemplate(taskType);
+        
+        if (template == null) {
+            logger.warn("未找到用户提示词模板: {}", taskType);
+            return "";
+        }
+        
+        return replaceVariables(template, parameters);
     }
 
     /**
@@ -104,10 +176,35 @@ public class PromptUtil {
      * @return 验证结果
      */
     public static Boolean validateTemplate(String template) {
-        // TODO: 待实现
-        // 1. 检查模板是否为空
-        // 2. 检查占位符格式是否正确
-        // 3. 返回验证结果
-        return null;
+        if (template == null || template.trim().isEmpty()) {
+            return false;
+        }
+        
+        // 检查占位符格式
+        Matcher matcher = PLACEHOLDER_PATTERN.matcher(template);
+        while (matcher.find()) {
+            String variableName = matcher.group(1);
+            if (variableName == null || variableName.trim().isEmpty()) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * 清除模板缓存
+     */
+    public static void clearCache() {
+        templateCache.clear();
+    }
+    
+    /**
+     * 从缓存中移除指定模板
+     *
+     * @param templateName 模板名称
+     */
+    public static void removeFromCache(String templateName) {
+        templateCache.remove(templateName);
     }
 }

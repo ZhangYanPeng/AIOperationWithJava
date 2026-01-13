@@ -1,7 +1,13 @@
 package com.company.diagnosis.controller;
 
 import com.company.diagnosis.model.dto.DiagnosisRequest;
+import com.company.diagnosis.service.OrchestratorService;
+import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -29,6 +35,11 @@ import java.util.Map;
 @RequestMapping("/api/v1/diagnosis")
 public class DiagnosisController {
 
+    private static final Logger logger = LoggerFactory.getLogger(DiagnosisController.class);
+
+    @Autowired
+    private OrchestratorService orchestratorService;
+
     /**
      * 启动诊断任务（同步接口）
      * <p>
@@ -39,12 +50,27 @@ public class DiagnosisController {
      * @return 诊断结果Map，包含sessionId、requestId、finalReport等
      */
     @PostMapping("/start")
-    public Mono<Map<String, Object>> startDiagnosis(@RequestBody DiagnosisRequest request) {
-        // TODO: 待实现
-        // 1. 验证请求参数
-        // 2. 调用OrchestratorService.startDiagnosis()
-        // 3. 等待诊断完成并返回结果
-        return null;
+    public Mono<ResponseEntity<Map<String, Object>>> startDiagnosis(
+            @Valid @RequestBody DiagnosisRequest request) {
+        
+        logger.info("收到诊断请求: type={}, problem={}", 
+                request.getDiagnosisType(), 
+                request.getProblem() != null && request.getProblem().length() > 50 ? 
+                        request.getProblem().substring(0, 50) + "..." : request.getProblem());
+        
+        return orchestratorService.startDiagnosis(request)
+                .map(result -> {
+                    result.put("success", true);
+                    return ResponseEntity.ok(result);
+                })
+                .onErrorResume(e -> {
+                    logger.error("诊断执行失败: {}", e.getMessage(), e);
+                    return Mono.just(ResponseEntity.internalServerError()
+                            .body(Map.of(
+                                    "success", false,
+                                    "error", e.getMessage()
+                            )));
+                });
     }
 
     /**
@@ -57,12 +83,24 @@ public class DiagnosisController {
      * @return 任务信息Map，包含sessionId、requestId、status等
      */
     @PostMapping("/start-async")
-    public Mono<Map<String, Object>> startDiagnosisAsync(@RequestBody DiagnosisRequest request) {
-        // TODO: 待实现
-        // 1. 验证请求参数
-        // 2. 调用OrchestratorService.startDiagnosisAsync()
-        // 3. 立即返回任务ID和初始状态
-        return null;
+    public Mono<ResponseEntity<Map<String, Object>>> startDiagnosisAsync(
+            @Valid @RequestBody DiagnosisRequest request) {
+        
+        logger.info("收到异步诊断请求: type={}", request.getDiagnosisType());
+        
+        return orchestratorService.startDiagnosisAsync(request)
+                .map(result -> {
+                    result.put("success", true);
+                    return ResponseEntity.accepted().body(result);
+                })
+                .onErrorResume(e -> {
+                    logger.error("异步诊断启动失败: {}", e.getMessage(), e);
+                    return Mono.just(ResponseEntity.internalServerError()
+                            .body(Map.of(
+                                    "success", false,
+                                    "error", e.getMessage()
+                            )));
+                });
     }
 
     /**
@@ -75,12 +113,19 @@ public class DiagnosisController {
      * @return 诊断过程事件流，包含各阶段的执行结果
      */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<Map<String, Object>> streamDiagnosis(@RequestBody DiagnosisRequest request) {
-        // TODO: 待实现
-        // 1. 验证请求参数
-        // 2. 调用OrchestratorService.startDiagnosisStream()
-        // 3. 返回SSE事件流
-        return null;
+    public Flux<Map<String, Object>> streamDiagnosis(
+            @Valid @RequestBody DiagnosisRequest request) {
+        
+        logger.info("收到流式诊断请求: type={}", request.getDiagnosisType());
+        
+        return orchestratorService.startDiagnosisStream(request)
+                .onErrorResume(e -> {
+                    logger.error("流式诊断失败: {}", e.getMessage(), e);
+                    return Flux.just(Map.of(
+                            "type", "error",
+                            "error", e.getMessage()
+                    ));
+                });
     }
 
     /**
@@ -93,12 +138,27 @@ public class DiagnosisController {
      * @return 任务状态Map，包含status、progress、currentLayer等
      */
     @GetMapping("/status/{sessionId}")
-    public Mono<Map<String, Object>> getDiagnosisStatus(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 从缓存或存储中查询任务状态
-        // 3. 返回状态信息
-        return null;
+    public Mono<ResponseEntity<Map<String, Object>>> getDiagnosisStatus(
+            @PathVariable String sessionId) {
+        
+        logger.debug("查询诊断状态: sessionId={}", sessionId);
+        
+        return orchestratorService.getDiagnosisStatus(sessionId)
+                .map(result -> {
+                    if (Boolean.TRUE.equals(result.get("success"))) {
+                        return ResponseEntity.ok(result);
+                    } else {
+                        return ResponseEntity.notFound().build();
+                    }
+                })
+                .onErrorResume(e -> {
+                    logger.error("查询状态失败: sessionId={}, error={}", sessionId, e.getMessage());
+                    return Mono.just(ResponseEntity.internalServerError()
+                            .body(Map.of(
+                                    "success", false,
+                                    "error", e.getMessage()
+                            )));
+                });
     }
 
     /**
@@ -111,12 +171,27 @@ public class DiagnosisController {
      * @return 诊断结果Map，包含所有层级的执行结果和最终报告
      */
     @GetMapping("/result/{sessionId}")
-    public Mono<Map<String, Object>> getDiagnosisResult(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 从存储中获取诊断结果
-        // 3. 返回完整结果
-        return null;
+    public Mono<ResponseEntity<Map<String, Object>>> getDiagnosisResult(
+            @PathVariable String sessionId) {
+        
+        logger.debug("获取诊断结果: sessionId={}", sessionId);
+        
+        return orchestratorService.getDiagnosisResult(sessionId)
+                .map(result -> {
+                    if (result.containsKey("error")) {
+                        return ResponseEntity.notFound().build();
+                    }
+                    result.put("success", true);
+                    return ResponseEntity.ok(result);
+                })
+                .onErrorResume(e -> {
+                    logger.error("获取结果失败: sessionId={}, error={}", sessionId, e.getMessage());
+                    return Mono.just(ResponseEntity.internalServerError()
+                            .body(Map.of(
+                                    "success", false,
+                                    "error", e.getMessage()
+                            )));
+                });
     }
 
     /**
@@ -129,11 +204,37 @@ public class DiagnosisController {
      * @return 操作结果Map，包含success、message等
      */
     @PostMapping("/stop/{sessionId}")
-    public Mono<Map<String, Object>> stopDiagnosis(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 调用OrchestratorService.stopDiagnosis()
-        // 3. 返回停止结果
-        return null;
+    public Mono<ResponseEntity<Map<String, Object>>> stopDiagnosis(
+            @PathVariable String sessionId) {
+        
+        logger.info("停止诊断任务: sessionId={}", sessionId);
+        
+        return orchestratorService.stopDiagnosis(sessionId)
+                .map(result -> {
+                    if (Boolean.TRUE.equals(result.get("success"))) {
+                        return ResponseEntity.ok(result);
+                    } else {
+                        return ResponseEntity.badRequest().body(result);
+                    }
+                })
+                .onErrorResume(e -> {
+                    logger.error("停止诊断失败: sessionId={}, error={}", sessionId, e.getMessage());
+                    return Mono.just(ResponseEntity.internalServerError()
+                            .body(Map.of(
+                                    "success", false,
+                                    "error", e.getMessage()
+                            )));
+                });
+    }
+    
+    /**
+     * 健康检查接口
+     */
+    @GetMapping("/health")
+    public Mono<ResponseEntity<Map<String, Object>>> healthCheck() {
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "status", "UP",
+                "service", "diagnosis-service"
+        )));
     }
 }

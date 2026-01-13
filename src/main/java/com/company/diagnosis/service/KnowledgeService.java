@@ -1,11 +1,16 @@
 package com.company.diagnosis.service;
 
+import com.company.diagnosis.config.ElasticsearchConfig.IndexNameProvider;
+import com.company.diagnosis.tool.es.ElasticsearchTool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
-import java.util.Map;
+import java.time.LocalDateTime;
+import java.util.*;
 
 /**
  * 知识库服务
@@ -28,6 +33,14 @@ import java.util.Map;
 @Service
 public class KnowledgeService {
 
+    private static final Logger logger = LoggerFactory.getLogger(KnowledgeService.class);
+
+    @Autowired
+    private ElasticsearchTool elasticsearchTool;
+    
+    @Autowired(required = false)
+    private IndexNameProvider indexNameProvider;
+
     /**
      * 添加知识文档
      * <p>
@@ -39,13 +52,20 @@ public class KnowledgeService {
      * @return 添加结果Map，包含docId
      */
     public Mono<Map<String, Object>> addDocument(String type, Map<String, Object> document) {
-        // TODO: 待实现
-        // 1. 验证知识库类型和文档格式
-        // 2. 生成文档ID
-        // 3. 提取向量嵌入（如果需要）
-        // 4. 索引到Elasticsearch
-        // 5. 返回文档ID
-        return null;
+        String index = resolveIndexName(type);
+        
+        // 添加时间戳
+        Map<String, Object> docWithMetadata = new HashMap<>(document);
+        docWithMetadata.put("createdAt", LocalDateTime.now().toString());
+        docWithMetadata.put("updatedAt", LocalDateTime.now().toString());
+        
+        String docId = document.containsKey("_id") ? 
+                String.valueOf(document.get("_id")) : UUID.randomUUID().toString();
+        docWithMetadata.remove("_id");
+        
+        return elasticsearchTool.indexDocument(index, docId, docWithMetadata)
+                .doOnSuccess(result -> logger.info("添加知识文档成功: type={}, docId={}", type, docId))
+                .doOnError(e -> logger.error("添加知识文档失败: type={}, error={}", type, e.getMessage()));
     }
 
     /**
@@ -59,13 +79,24 @@ public class KnowledgeService {
      * @return 批量添加结果，包含成功数量、失败列表等
      */
     public Mono<Map<String, Object>> batchAddDocuments(String type, List<Map<String, Object>> documents) {
-        // TODO: 待实现
-        // 1. 验证所有文档格式
-        // 2. 批量提取向量嵌入
-        // 3. 批量索引到Elasticsearch
-        // 4. 统计成功和失败数量
-        // 5. 返回批量操作结果
-        return null;
+        String index = resolveIndexName(type);
+        
+        // 为每个文档添加时间戳
+        List<Map<String, Object>> docsWithMetadata = documents.stream()
+                .map(doc -> {
+                    Map<String, Object> newDoc = new HashMap<>(doc);
+                    newDoc.put("createdAt", LocalDateTime.now().toString());
+                    newDoc.put("updatedAt", LocalDateTime.now().toString());
+                    if (!newDoc.containsKey("_id")) {
+                        newDoc.put("_id", UUID.randomUUID().toString());
+                    }
+                    return newDoc;
+                })
+                .toList();
+        
+        return elasticsearchTool.bulkIndex(index, docsWithMetadata)
+                .doOnSuccess(result -> logger.info("批量添加知识文档完成: type={}, count={}", type, documents.size()))
+                .doOnError(e -> logger.error("批量添加知识文档失败: type={}, error={}", type, e.getMessage()));
     }
 
     /**
@@ -79,13 +110,18 @@ public class KnowledgeService {
      * @return 更新结果
      */
     public Mono<Map<String, Object>> updateDocument(String docId, Map<String, Object> document) {
-        // TODO: 待实现
-        // 1. 验证docId和文档格式
-        // 2. 重新提取向量嵌入
-        // 3. 更新Elasticsearch索引
-        // 4. 清理相关缓存
-        // 5. 返回更新结果
-        return null;
+        String type = (String) document.getOrDefault("_type", "domain-knowledge");
+        String index = resolveIndexName(type);
+        
+        // 更新时间戳
+        Map<String, Object> docWithMetadata = new HashMap<>(document);
+        docWithMetadata.put("updatedAt", LocalDateTime.now().toString());
+        docWithMetadata.remove("_type");
+        docWithMetadata.remove("_id");
+        
+        return elasticsearchTool.updateDocument(index, docId, docWithMetadata)
+                .doOnSuccess(result -> logger.info("更新知识文档成功: docId={}", docId))
+                .doOnError(e -> logger.error("更新知识文档失败: docId={}, error={}", docId, e.getMessage()));
     }
 
     /**
@@ -98,12 +134,17 @@ public class KnowledgeService {
      * @return 删除结果
      */
     public Mono<Map<String, Object>> deleteDocument(String docId) {
-        // TODO: 待实现
-        // 1. 验证docId
-        // 2. 从Elasticsearch删除
-        // 3. 清理相关缓存
-        // 4. 返回删除结果
-        return null;
+        // 尝试从所有索引删除
+        return Flux.fromIterable(getAllIndexNames())
+                .flatMap(index -> elasticsearchTool.deleteDocument(index, docId))
+                .filter(result -> Boolean.TRUE.equals(result.get("success")))
+                .next()
+                .defaultIfEmpty(Map.of("success", false, "error", "文档不存在"))
+                .doOnSuccess(result -> {
+                    if (Boolean.TRUE.equals(result.get("success"))) {
+                        logger.info("删除知识文档成功: docId={}", docId);
+                    }
+                });
     }
 
     /**
@@ -116,11 +157,12 @@ public class KnowledgeService {
      * @return 文档详情Map
      */
     public Mono<Map<String, Object>> getDocument(String docId) {
-        // TODO: 待实现
-        // 1. 验证docId
-        // 2. 从缓存或Elasticsearch获取文档
-        // 3. 返回文档内容
-        return null;
+        // 从所有索引查找
+        return Flux.fromIterable(getAllIndexNames())
+                .flatMap(index -> elasticsearchTool.getDocument(index, docId))
+                .filter(result -> Boolean.TRUE.equals(result.get("success")))
+                .next()
+                .defaultIfEmpty(Map.of("success", false, "error", "文档不存在"));
     }
 
     /**
@@ -136,13 +178,23 @@ public class KnowledgeService {
      * @return 检索结果列表，每项包含文档内容和相关度分数
      */
     public Flux<Map<String, Object>> searchDocuments(String query, String type, Integer topK, String searchMode) {
-        // TODO: 待实现
-        // 1. 验证查询参数
-        // 2. 根据searchMode选择检索策略
-        // 3. 执行Elasticsearch查询
-        // 4. 如果是语义检索，进行向量相似度计算
-        // 5. 排序并返回Top-K结果
-        return null;
+        int limit = topK != null ? topK : 10;
+        String mode = searchMode != null ? searchMode : "keyword";
+        
+        List<String> indicesToSearch = type != null ? 
+                List.of(resolveIndexName(type)) : getAllIndexNames();
+        
+        Map<String, Object> searchQuery = buildSearchQuery(query, mode);
+        
+        return Flux.fromIterable(indicesToSearch)
+                .flatMap(index -> elasticsearchTool.search(index, searchQuery, limit))
+                .sort((a, b) -> {
+                    Double scoreA = (Double) a.getOrDefault("_score", 0.0);
+                    Double scoreB = (Double) b.getOrDefault("_score", 0.0);
+                    return scoreB.compareTo(scoreA);
+                })
+                .take(limit)
+                .doOnComplete(() -> logger.debug("知识检索完成: query={}, type={}, mode={}", query, type, mode));
     }
 
     /**
@@ -157,13 +209,26 @@ public class KnowledgeService {
      * @return 分页结果Map，包含total、page、size、data等
      */
     public Mono<Map<String, Object>> listDocuments(String type, Integer page, Integer size) {
-        // TODO: 待实现
-        // 1. 验证分页参数
-        // 2. 构建Elasticsearch分页查询
-        // 3. 执行查询并获取总数
-        // 4. 构建分页结果
-        // 5. 返回分页数据
-        return null;
+        int pageNum = page != null && page > 0 ? page : 1;
+        int pageSize = size != null && size > 0 ? size : 10;
+        
+        String index = type != null ? resolveIndexName(type) : getAllIndexNames().get(0);
+        
+        Map<String, Object> query = new HashMap<>();
+        query.put("type", "match_all");
+        
+        return elasticsearchTool.search(index, query, pageSize * pageNum)
+                .skip((long) (pageNum - 1) * pageSize)
+                .take(pageSize)
+                .collectList()
+                .map(docs -> {
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("page", pageNum);
+                    result.put("size", pageSize);
+                    result.put("data", docs);
+                    result.put("count", docs.size());
+                    return result;
+                });
     }
 
     /**
@@ -175,12 +240,22 @@ public class KnowledgeService {
      * @return 统计信息Map，包含各类型的文档数量、总大小等
      */
     public Mono<Map<String, Object>> getStatistics() {
-        // TODO: 待实现
-        // 1. 查询所有知识库类型的索引
-        // 2. 统计每个类型的文档数量
-        // 3. 计算总存储大小
-        // 4. 返回统计信息
-        return null;
+        return Flux.fromIterable(getAllIndexNames())
+                .flatMap(index -> {
+                    Map<String, Object> query = new HashMap<>();
+                    query.put("type", "match_all");
+                    return elasticsearchTool.search(index, query, 0)
+                            .count()
+                            .map(count -> Map.entry(index, count));
+                })
+                .collectMap(Map.Entry::getKey, Map.Entry::getValue)
+                .map(indexCounts -> {
+                    Map<String, Object> stats = new HashMap<>();
+                    stats.put("indexCounts", indexCounts);
+                    stats.put("totalDocuments", indexCounts.values().stream().mapToLong(Long::longValue).sum());
+                    stats.put("indexCount", indexCounts.size());
+                    return stats;
+                });
     }
 
     /**
@@ -193,11 +268,13 @@ public class KnowledgeService {
      * @return 向量嵌入数组
      */
     public Mono<float[]> generateEmbedding(String content) {
-        // TODO: 待实现
-        // 1. 调用嵌入模型API（如DashScope Embedding）
-        // 2. 将内容转换为向量
-        // 3. 返回向量数组
-        return null;
+        // TODO: 集成实际的嵌入模型API（如DashScope Embedding）
+        // 当前返回一个占位符实现
+        return Mono.fromCallable(() -> {
+            logger.debug("生成向量嵌入: content长度={}", content != null ? content.length() : 0);
+            // 返回一个简单的占位向量
+            return new float[768]; // 假设嵌入维度为768
+        });
     }
 
     /**
@@ -211,10 +288,115 @@ public class KnowledgeService {
      * @return 相似度分数（0-1之间）
      */
     public Float calculateSimilarity(float[] vector1, float[] vector2) {
-        // TODO: 待实现
-        // 1. 验证向量维度
-        // 2. 计算余弦相似度
-        // 3. 返回相似度分数
-        return null;
+        if (vector1 == null || vector2 == null || vector1.length != vector2.length) {
+            return 0.0f;
+        }
+        
+        // 计算余弦相似度
+        double dotProduct = 0.0;
+        double norm1 = 0.0;
+        double norm2 = 0.0;
+        
+        for (int i = 0; i < vector1.length; i++) {
+            dotProduct += vector1[i] * vector2[i];
+            norm1 += vector1[i] * vector1[i];
+            norm2 += vector2[i] * vector2[i];
+        }
+        
+        if (norm1 == 0 || norm2 == 0) {
+            return 0.0f;
+        }
+        
+        return (float) (dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2)));
+    }
+    
+    /**
+     * 根据知识类型检索
+     *
+     * @param query 查询内容
+     * @param knowledgeTypes 知识类型列表
+     * @param topK 返回数量
+     * @return 检索结果
+     */
+    public Flux<Map<String, Object>> searchByTypes(String query, List<String> knowledgeTypes, Integer topK) {
+        if (knowledgeTypes == null || knowledgeTypes.isEmpty()) {
+            return searchDocuments(query, null, topK, "keyword");
+        }
+        
+        int limit = topK != null ? topK : 10;
+        
+        return Flux.fromIterable(knowledgeTypes)
+                .flatMap(type -> searchDocuments(query, type, limit, "keyword"))
+                .sort((a, b) -> {
+                    Double scoreA = (Double) a.getOrDefault("_score", 0.0);
+                    Double scoreB = (Double) b.getOrDefault("_score", 0.0);
+                    return scoreB.compareTo(scoreA);
+                })
+                .take(limit);
+    }
+    
+    /**
+     * 解析索引名称
+     */
+    private String resolveIndexName(String type) {
+        if (indexNameProvider != null) {
+            return indexNameProvider.getIndexByType(type);
+        }
+        
+        // 默认索引映射
+        return switch (type) {
+            case "tool", "tool-interface" -> "kb_tool_interface";
+            case "diagnosis", "diagnosis-manual" -> "kb_diagnosis_manual";
+            case "reasoning", "reasoning-rules" -> "kb_reasoning_rule";
+            case "conclusion", "conclusion-analysis" -> "kb_conclusion_analysis";
+            case "domain", "domain-knowledge" -> "kb_domain_knowledge";
+            default -> type.startsWith("kb_") ? type : "kb_" + type;
+        };
+    }
+    
+    /**
+     * 获取所有索引名称
+     */
+    private List<String> getAllIndexNames() {
+        return List.of(
+                "kb_tool_interface",
+                "kb_diagnosis_manual",
+                "kb_reasoning_rule",
+                "kb_conclusion_analysis",
+                "kb_domain_knowledge"
+        );
+    }
+    
+    /**
+     * 构建搜索查询
+     */
+    private Map<String, Object> buildSearchQuery(String query, String mode) {
+        Map<String, Object> searchQuery = new HashMap<>();
+        
+        switch (mode) {
+            case "keyword" -> {
+                searchQuery.put("type", "multi_match");
+                searchQuery.put("queryText", query);
+                searchQuery.put("fields", List.of("content", "title", "description"));
+            }
+            case "semantic" -> {
+                // 语义检索需要向量支持
+                searchQuery.put("type", "multi_match");
+                searchQuery.put("queryText", query);
+                searchQuery.put("fields", List.of("content"));
+            }
+            case "hybrid" -> {
+                // 混合检索
+                searchQuery.put("type", "multi_match");
+                searchQuery.put("queryText", query);
+                searchQuery.put("fields", List.of("content", "title", "description", "keywords"));
+            }
+            default -> {
+                searchQuery.put("type", "multi_match");
+                searchQuery.put("queryText", query);
+            }
+        }
+        
+        return searchQuery;
     }
 }
