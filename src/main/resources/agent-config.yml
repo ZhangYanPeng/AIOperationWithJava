@@ -1,0 +1,758 @@
+# 智能体配置文件
+# 定义层级化的智能体架构,支持配置驱动的动态扩展
+
+agents:
+  # ==================== 第1层:接口调用层(最底层) ====================
+  interface-invocation:
+    name: "InterfaceInvocationAgent"
+    description: "封装所有外部API调用,提供标准化的接口调用能力"
+    layer: 1
+    enabled: true
+    lowerLayerAgent: null  # 没有下层,直接调用外部API
+    
+    # 模型配置
+    model:
+      provider: "dashscope"
+      modelName: "qwen-max"
+      temperature: 0.2
+      maxTokens: 2000
+      topP: 0.9
+      enableThinking: false
+      streaming: false
+    
+    # 工具函数列表
+    tools:
+      - searchInterfaceDoc
+      - parseInterfaceDoc
+      - buildRequestUrl
+      - invokeHttpApi
+      - parseJsonResponse
+      - extractFields
+    
+    # 提示词模板
+    promptTemplates:
+      retrieve-doc: "classpath:prompts/interface-invocation/retrieve-doc.txt"
+      parse-doc: "classpath:prompts/interface-invocation/parse-doc.txt"
+      build-url: "classpath:prompts/interface-invocation/build-url.txt"
+      extract-fields: "classpath:prompts/interface-invocation/extract-fields.txt"
+    
+    # 重试配置
+    maxRetries: 3
+    retryBackoff: 1000
+    
+    # 超时配置
+    timeout: 60000
+    
+    # 并发配置
+    concurrentSteps: false
+    
+    # 输出校验
+    validation:
+      enabled: true
+      schemaPath: "classpath:schemas/interface-invocation-output.json"
+
+  # ==================== 第2层:基础执行层(必选层) ====================
+  execution-layers:
+    # 第2层:主诊断智能体
+    - name: "PrimaryDiagnosisAgent"
+      description: "实现基础诊断逻辑,通过循环调用第1层完成工具调用"
+      layer: 2
+      enabled: true
+      lowerLayerAgent: "InterfaceInvocationAgent"  # 【关键】指定调用第1层
+      
+      # 触发条件(SpEL表达式)
+      triggerCondition: "always"
+      
+      # 知识库类型
+      knowledgeTypes:
+        - diagnosis-manual
+        - reasoning-rules
+        - domain-knowledge
+      
+      # 模型配置
+      model:
+        provider: "dashscope"
+        modelName: "qwen-max"
+        temperature: 0.3
+        maxTokens: 3000
+        topP: 0.9
+        enableThinking: false
+        streaming: true
+      
+      # 提示词模板
+      promptTemplates:
+        planning: "classpath:prompts/execution-layer/planning.txt"
+        reasoning: "classpath:prompts/execution-layer/reasoning.txt"
+        decision: "classpath:prompts/execution-layer/decision.txt"
+      
+      # 重试配置
+      maxRetries: 2
+      retryBackoff: 2000
+      
+      # 超时配置
+      timeout: 300000
+      
+      # 并发配置
+      concurrentSteps: false
+      maxConcurrency: 1
+      
+      # 输出校验
+      validation:
+        enabled: true
+        schemaPath: "classpath:schemas/execution-layer-output.json"
+      
+      # 步骤配置
+      maxSteps: 20
+      stepTimeout: 60000
+
+    # ==================== 第3层:高级执行层(可选层) ====================
+    # 第3层:深度分析智能体
+    - name: "DeepAnalysisAgent"
+      description: "实现更高级的业务逻辑,通过循环调用第2层完成复杂任务"
+      layer: 3
+      enabled: true
+      lowerLayerAgent: "PrimaryDiagnosisAgent"  # 【关键】指定调用第2层
+      
+      # 触发条件(SpEL表达式)
+      triggerCondition: "#diagnosisType == 'deep-analysis' or #needDeepAnalysis == true"
+      
+      # 知识库类型
+      knowledgeTypes:
+        - conclusion-analysis
+        - domain-knowledge
+        - expert-knowledge
+      
+      # 模型配置
+      model:
+        provider: "dashscope"
+        modelName: "qwen-turbo"
+        temperature: 0.4
+        maxTokens: 4000
+        topP: 0.9
+        enableThinking: true
+        streaming: true
+      
+      # 提示词模板
+      promptTemplates:
+        planning: "classpath:prompts/layer3/deep-analysis-planning.txt"
+        reasoning: "classpath:prompts/layer3/deep-analysis-reasoning.txt"
+        decision: "classpath:prompts/layer3/deep-analysis-decision.txt"
+      
+      # 重试配置
+      maxRetries: 2
+      retryBackoff: 2000
+      
+      # 超时配置
+      timeout: 600000
+      
+      # 并发配置
+      concurrentSteps: false
+      maxConcurrency: 1
+      
+      # 输出校验
+      validation:
+        enabled: true
+        schemaPath: "classpath:schemas/layer3-output.json"
+      
+      # 步骤配置
+      maxSteps: 15
+      stepTimeout: 120000
+
+    # ==================== 第4层:示例(可扩展,默认禁用) ====================
+    # 第4层:专家咨询智能体(示例)
+    - name: "ExpertConsultationAgent"
+      description: "最高级别的智能体,处理需要专家级判断的复杂场景"
+      layer: 4
+      enabled: false  # 默认禁用
+      lowerLayerAgent: "DeepAnalysisAgent"  # 【关键】指定调用第3层
+      
+      # 触发条件(SpEL表达式)
+      triggerCondition: "#requireExpertOpinion == true"
+      
+      # 知识库类型
+      knowledgeTypes:
+        - expert-knowledge
+        - case-library
+        - best-practices
+      
+      # 模型配置
+      model:
+        provider: "dashscope"
+        modelName: "qwen-max"
+        temperature: 0.5
+        maxTokens: 5000
+        topP: 0.95
+        enableThinking: true
+        streaming: true
+      
+      # 提示词模板
+      promptTemplates:
+        planning: "classpath:prompts/layer4/expert-planning.txt"
+        reasoning: "classpath:prompts/layer4/expert-reasoning.txt"
+        decision: "classpath:prompts/layer4/expert-decision.txt"
+      
+      # 重试配置
+      maxRetries: 1
+      retryBackoff: 3000
+      
+      # 超时配置
+      timeout: 900000
+      
+      # 并发配置
+      concurrentSteps: false
+      maxConcurrency: 1
+      
+      # 输出校验
+      validation:
+        enabled: true
+        schemaPath: "classpath:schemas/layer4-output.json"
+      
+      # 步骤配置
+      maxSteps: 10
+      stepTimeout: 180000
+
+# 编排器配置
+orchestrator:
+  # 从最高层开始执行
+  startFromTopLayer: true
+  
+  # 自动检测最高层(layer值最大且enabled=true)
+  autoDetectTopLayer: true
+  
+  # 手动指定顶层智能体(如果不使用自动检测)
+  topLayerAgent: null
+  
+  # 会话管理
+  session:
+    timeout: 3600000  # 1小时
+    maxConcurrent: 100
+    cleanupInterval: 300000  # 5分钟
+  
+  # 事件发布
+  eventPublisher:
+    enabled: true
+    asyncPublish: true
+    queueSize: 1000
+  
+  # 调用链追踪
+  tracing:
+    enabled: true
+    detailLevel: "full"  # basic, detailed, full
+    includePrompts: false
+    includeResponses: true
+
+# 知识库检索配置
+knowledge:
+  retrieval:
+    # 检索策略
+    strategy: "hybrid"  # exact, fulltext, vector, hybrid
+    
+    # 向量检索
+    vector:
+      enabled: true
+      topK: 5
+      minScore: 0.7
+      embeddingModel: "text-embedding-v1"
+    
+    # 全文检索
+    fulltext:
+      enabled: true
+      analyzer: "ik_smart"
+      minScore: 0.5
+    
+    # 精确匹配
+    exact:
+      enabled: true
+      fields:
+        - tool_name
+        - api_path
+        - rule_id
+    
+    # 混合检索权重
+    hybrid:
+      vectorWeight: 0.6
+      fulltextWeight: 0.4
+    
+    # 结果过滤
+    filter:
+      enabled: true
+      maxResults: 10
+      deduplication: true
+
+# 输出校验配置
+validation:
+  # JSON Schema校验
+  jsonSchema:
+    enabled: true
+    strictMode: false
+  
+  # 业务规则校验
+  businessRules:
+    enabled: true
+    customValidators:
+      - "com.company.diagnosis.validator.OutputFormatValidator"
+      - "com.company.diagnosis.validator.ContentCompletenessValidator"
+  
+  # 纠错机制
+  correction:
+    enabled: true
+    maxAttempts: 2
+    strategy: "llm-based"  # llm-based, rule-based
+
+# 并发控制配置
+concurrency:
+  # 会话级并发
+  session:
+    enabled: false
+    maxConcurrent: 1
+  
+  # 智能体级并发
+  agent:
+    enabled: false
+    maxConcurrent: 1
+  
+  # 步骤级并发
+  step:
+    enabled: false
+    maxConcurrent: 3
+  
+  # 线程池配置
+  threadPool:
+    coreSize: 10
+    maxSize: 50
+    queueCapacity: 1000
+    keepAliveSeconds: 60
+
+# 错误处理配置
+errorHandling:
+  # 重试策略
+  retry:
+    enabled: true
+    maxAttempts: 3
+    backoffStrategy: "exponential"  # fixed, exponential, random
+    initialDelay: 1000
+    maxDelay: 10000
+    multiplier: 2.0
+  
+  # 降级策略
+  fallback:
+    enabled: true
+    strategy: "default-response"  # default-response, simplified-flow, manual-intervention
+  
+  # 熔断策略
+  circuitBreaker:
+    enabled: false
+    failureThreshold: 5
+    successThreshold: 2
+    timeout: 60000
+    resetTimeout: 300000
+
+# 监控配置
+monitoring:
+  # 性能指标
+  metrics:
+    enabled: true
+    exportInterval: 60000
+    dimensions:
+      - agentName
+      - layerLevel
+      - operationType
+  
+  # 日志配置
+  logging:
+    enabled: true
+    logLevel: "DEBUG"
+    includePrompts: true
+    includeResponses: true
+    maxPromptLength: 1000
+    maxResponseLength: 2000
+  
+  # 告警配置
+  alerting:
+    enabled: false
+    rules:
+      - name: "high-error-rate"
+        condition: "errorRate > 0.1"
+        action: "notify"
+      - name: "slow-response"
+        condition: "avgResponseTime > 10000"
+        action: "notify"
+# 智能体配置文件
+# 定义层级化的智能体架构,支持配置驱动的动态扩展
+
+agents:
+  # ==================== 第1层:接口调用层(最底层) ====================
+  interface-invocation:
+    name: "InterfaceInvocationAgent"
+    description: "封装所有外部API调用,提供标准化的接口调用能力"
+    layer: 1
+    enabled: true
+    lowerLayerAgent: null  # 没有下层,直接调用外部API
+    
+    # 模型配置
+    model:
+      provider: "dashscope"
+      modelName: "qwen-max"
+      temperature: 0.2
+      maxTokens: 2000
+      topP: 0.9
+      enableThinking: false
+      streaming: false
+    
+    # 工具函数列表
+    tools:
+      - searchInterfaceDoc
+      - parseInterfaceDoc
+      - buildRequestUrl
+      - invokeHttpApi
+      - parseJsonResponse
+      - extractFields
+    
+    # 提示词模板
+    promptTemplates:
+      retrieve-doc: "classpath:prompts/interface-invocation/retrieve-doc.txt"
+      parse-doc: "classpath:prompts/interface-invocation/parse-doc.txt"
+      build-url: "classpath:prompts/interface-invocation/build-url.txt"
+      extract-fields: "classpath:prompts/interface-invocation/extract-fields.txt"
+    
+    # 重试配置
+    maxRetries: 3
+    retryBackoff: 1000
+    
+    # 超时配置
+    timeout: 60000
+    
+    # 并发配置
+    concurrentSteps: false
+    
+    # 输出校验
+    validation:
+      enabled: true
+      schemaPath: "classpath:schemas/interface-invocation-output.json"
+
+  # ==================== 第2层:基础执行层(必选层) ====================
+  execution-layers:
+    # 第2层:主诊断智能体
+    - name: "PrimaryDiagnosisAgent"
+      description: "实现基础诊断逻辑,通过循环调用第1层完成工具调用"
+      layer: 2
+      enabled: true
+      lowerLayerAgent: "InterfaceInvocationAgent"  # 【关键】指定调用第1层
+      
+      # 触发条件(SpEL表达式)
+      triggerCondition: "always"
+      
+      # 知识库类型
+      knowledgeTypes:
+        - diagnosis-manual
+        - reasoning-rules
+        - domain-knowledge
+      
+      # 模型配置
+      model:
+        provider: "dashscope"
+        modelName: "qwen-max"
+        temperature: 0.3
+        maxTokens: 3000
+        topP: 0.9
+        enableThinking: false
+        streaming: true
+      
+      # 提示词模板
+      promptTemplates:
+        planning: "classpath:prompts/execution-layer/planning.txt"
+        reasoning: "classpath:prompts/execution-layer/reasoning.txt"
+        decision: "classpath:prompts/execution-layer/decision.txt"
+      
+      # 重试配置
+      maxRetries: 2
+      retryBackoff: 2000
+      
+      # 超时配置
+      timeout: 300000
+      
+      # 并发配置
+      concurrentSteps: false
+      maxConcurrency: 1
+      
+      # 输出校验
+      validation:
+        enabled: true
+        schemaPath: "classpath:schemas/execution-layer-output.json"
+      
+      # 步骤配置
+      maxSteps: 20
+      stepTimeout: 60000
+
+    # ==================== 第3层:高级执行层(可选层) ====================
+    # 第3层:深度分析智能体
+    - name: "DeepAnalysisAgent"
+      description: "实现更高级的业务逻辑,通过循环调用第2层完成复杂任务"
+      layer: 3
+      enabled: true
+      lowerLayerAgent: "PrimaryDiagnosisAgent"  # 【关键】指定调用第2层
+      
+      # 触发条件(SpEL表达式)
+      triggerCondition: "#diagnosisType == 'deep-analysis' or #needDeepAnalysis == true"
+      
+      # 知识库类型
+      knowledgeTypes:
+        - conclusion-analysis
+        - domain-knowledge
+        - expert-knowledge
+      
+      # 模型配置
+      model:
+        provider: "dashscope"
+        modelName: "qwen-turbo"
+        temperature: 0.4
+        maxTokens: 4000
+        topP: 0.9
+        enableThinking: true
+        streaming: true
+      
+      # 提示词模板
+      promptTemplates:
+        planning: "classpath:prompts/layer3/deep-analysis-planning.txt"
+        reasoning: "classpath:prompts/layer3/deep-analysis-reasoning.txt"
+        decision: "classpath:prompts/layer3/deep-analysis-decision.txt"
+      
+      # 重试配置
+      maxRetries: 2
+      retryBackoff: 2000
+      
+      # 超时配置
+      timeout: 600000
+      
+      # 并发配置
+      concurrentSteps: false
+      maxConcurrency: 1
+      
+      # 输出校验
+      validation:
+        enabled: true
+        schemaPath: "classpath:schemas/layer3-output.json"
+      
+      # 步骤配置
+      maxSteps: 15
+      stepTimeout: 120000
+
+    # ==================== 第4层:示例(可扩展,默认禁用) ====================
+    # 第4层:专家咨询智能体(示例)
+    - name: "ExpertConsultationAgent"
+      description: "最高级别的智能体,处理需要专家级判断的复杂场景"
+      layer: 4
+      enabled: false  # 默认禁用
+      lowerLayerAgent: "DeepAnalysisAgent"  # 【关键】指定调用第3层
+      
+      # 触发条件(SpEL表达式)
+      triggerCondition: "#requireExpertOpinion == true"
+      
+      # 知识库类型
+      knowledgeTypes:
+        - expert-knowledge
+        - case-library
+        - best-practices
+      
+      # 模型配置
+      model:
+        provider: "dashscope"
+        modelName: "qwen-max"
+        temperature: 0.5
+        maxTokens: 5000
+        topP: 0.95
+        enableThinking: true
+        streaming: true
+      
+      # 提示词模板
+      promptTemplates:
+        planning: "classpath:prompts/layer4/expert-planning.txt"
+        reasoning: "classpath:prompts/layer4/expert-reasoning.txt"
+        decision: "classpath:prompts/layer4/expert-decision.txt"
+      
+      # 重试配置
+      maxRetries: 1
+      retryBackoff: 3000
+      
+      # 超时配置
+      timeout: 900000
+      
+      # 并发配置
+      concurrentSteps: false
+      maxConcurrency: 1
+      
+      # 输出校验
+      validation:
+        enabled: true
+        schemaPath: "classpath:schemas/layer4-output.json"
+      
+      # 步骤配置
+      maxSteps: 10
+      stepTimeout: 180000
+
+# 编排器配置
+orchestrator:
+  # 从最高层开始执行
+  startFromTopLayer: true
+  
+  # 自动检测最高层(layer值最大且enabled=true)
+  autoDetectTopLayer: true
+  
+  # 手动指定顶层智能体(如果不使用自动检测)
+  topLayerAgent: null
+  
+  # 会话管理
+  session:
+    timeout: 3600000  # 1小时
+    maxConcurrent: 100
+    cleanupInterval: 300000  # 5分钟
+  
+  # 事件发布
+  eventPublisher:
+    enabled: true
+    asyncPublish: true
+    queueSize: 1000
+  
+  # 调用链追踪
+  tracing:
+    enabled: true
+    detailLevel: "full"  # basic, detailed, full
+    includePrompts: false
+    includeResponses: true
+
+# 知识库检索配置
+knowledge:
+  retrieval:
+    # 检索策略
+    strategy: "hybrid"  # exact, fulltext, vector, hybrid
+    
+    # 向量检索
+    vector:
+      enabled: true
+      topK: 5
+      minScore: 0.7
+      embeddingModel: "text-embedding-v1"
+    
+    # 全文检索
+    fulltext:
+      enabled: true
+      analyzer: "ik_smart"
+      minScore: 0.5
+    
+    # 精确匹配
+    exact:
+      enabled: true
+      fields:
+        - tool_name
+        - api_path
+        - rule_id
+    
+    # 混合检索权重
+    hybrid:
+      vectorWeight: 0.6
+      fulltextWeight: 0.4
+    
+    # 结果过滤
+    filter:
+      enabled: true
+      maxResults: 10
+      deduplication: true
+
+# 输出校验配置
+validation:
+  # JSON Schema校验
+  jsonSchema:
+    enabled: true
+    strictMode: false
+  
+  # 业务规则校验
+  businessRules:
+    enabled: true
+    customValidators:
+      - "com.company.diagnosis.validator.OutputFormatValidator"
+      - "com.company.diagnosis.validator.ContentCompletenessValidator"
+  
+  # 纠错机制
+  correction:
+    enabled: true
+    maxAttempts: 2
+    strategy: "llm-based"  # llm-based, rule-based
+
+# 并发控制配置
+concurrency:
+  # 会话级并发
+  session:
+    enabled: false
+    maxConcurrent: 1
+  
+  # 智能体级并发
+  agent:
+    enabled: false
+    maxConcurrent: 1
+  
+  # 步骤级并发
+  step:
+    enabled: false
+    maxConcurrent: 3
+  
+  # 线程池配置
+  threadPool:
+    coreSize: 10
+    maxSize: 50
+    queueCapacity: 1000
+    keepAliveSeconds: 60
+
+# 错误处理配置
+errorHandling:
+  # 重试策略
+  retry:
+    enabled: true
+    maxAttempts: 3
+    backoffStrategy: "exponential"  # fixed, exponential, random
+    initialDelay: 1000
+    maxDelay: 10000
+    multiplier: 2.0
+  
+  # 降级策略
+  fallback:
+    enabled: true
+    strategy: "default-response"  # default-response, simplified-flow, manual-intervention
+  
+  # 熔断策略
+  circuitBreaker:
+    enabled: false
+    failureThreshold: 5
+    successThreshold: 2
+    timeout: 60000
+    resetTimeout: 300000
+
+# 监控配置
+monitoring:
+  # 性能指标
+  metrics:
+    enabled: true
+    exportInterval: 60000
+    dimensions:
+      - agentName
+      - layerLevel
+      - operationType
+  
+  # 日志配置
+  logging:
+    enabled: true
+    logLevel: "DEBUG"
+    includePrompts: true
+    includeResponses: true
+    maxPromptLength: 1000
+    maxResponseLength: 2000
+  
+  # 告警配置
+  alerting:
+    enabled: false
+    rules:
+      - name: "high-error-rate"
+        condition: "errorRate > 0.1"
+        action: "notify"
+      - name: "slow-response"
+        condition: "avgResponseTime > 10000"
+        action: "notify"

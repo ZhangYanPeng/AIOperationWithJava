@@ -1,0 +1,110 @@
+# 生产环境配置
+spring:
+  profiles:
+    active: prod
+
+# Elasticsearch配置
+elasticsearch:
+  host: ${ES_HOST:es-cluster.production.com}
+  port: ${ES_PORT:9200}
+  username: ${ES_USERNAME}
+  password: ${ES_PASSWORD}
+
+# Kafka配置
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_SERVERS:kafka-cluster.production.com:9092}
+
+# LLM配置
+llm:
+  default-provider: dashscope
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY}
+
+# 外部工具API配置
+tool-api:
+  base-url: ${TOOL_API_BASE_URL:https://tool-api.production.com}
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.company.diagnosis: INFO
+    org.springframework: WARN
+    io.agentscope: INFO
+  file:
+    name: logs/diagnosis-system-prod.log
+
+# 服务器配置
+server:
+  port: ${SERVER_PORT:8080}
+
+# SpringDoc配置
+springdoc:
+  swagger-ui:
+    enabled: false  # 生产环境禁用Swagger UI
+
+# 管理端点配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+# 生产环境配置
+spring:
+  profiles:
+    active: prod
+
+# Elasticsearch配置
+elasticsearch:
+  host: ${ES_HOST:es-cluster.production.com}
+  port: ${ES_PORT:9200}
+  username: ${ES_USERNAME}
+  password: ${ES_PASSWORD}
+
+# Kafka配置
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_SERVERS:kafka-cluster.production.com:9092}
+
+# LLM配置
+llm:
+  default-provider: dashscope
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY}
+
+# 外部工具API配置
+tool-api:
+  base-url: ${TOOL_API_BASE_URL:https://tool-api.production.com}
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.company.diagnosis: INFO
+    org.springframework: WARN
+    io.agentscope: INFO
+  file:
+    name: logs/diagnosis-system-prod.log
+
+# 服务器配置
+server:
+  port: ${SERVER_PORT:8080}
+
+# SpringDoc配置
+springdoc:
+  swagger-ui:
+    enabled: false  # 生产环境禁用Swagger UI
+
+# 管理端点配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never

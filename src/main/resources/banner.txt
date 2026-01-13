@@ -1,0 +1,2 @@
+# Spring Boot诊断系统
+# TODO: 可自定义启动横幅内容

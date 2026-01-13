@@ -1,0 +1,90 @@
+# 开发环境配置
+spring:
+  profiles:
+    active: dev
+
+# Elasticsearch配置
+elasticsearch:
+  host: localhost
+  port: 9200
+  username: elastic
+  password: changeme
+
+# Kafka配置
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+
+# LLM配置
+llm:
+  default-provider: dashscope
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY:your-dev-api-key}
+
+# 外部工具API配置
+tool-api:
+  base-url: http://localhost:8081
+
+# 日志配置
+logging:
+  level:
+    root: DEBUG
+    com.company.diagnosis: TRACE
+    org.springframework: DEBUG
+    io.agentscope: TRACE
+  file:
+    name: logs/diagnosis-system-dev.log
+
+# 服务器配置
+server:
+  port: 8080
+
+# SpringDoc配置
+springdoc:
+  swagger-ui:
+    enabled: true
+# 开发环境配置
+spring:
+  profiles:
+    active: dev
+
+# Elasticsearch配置
+elasticsearch:
+  host: localhost
+  port: 9200
+  username: elastic
+  password: changeme
+
+# Kafka配置
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+
+# LLM配置
+llm:
+  default-provider: dashscope
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY:your-dev-api-key}
+
+# 外部工具API配置
+tool-api:
+  base-url: http://localhost:8081
+
+# 日志配置
+logging:
+  level:
+    root: DEBUG
+    com.company.diagnosis: TRACE
+    org.springframework: DEBUG
+    io.agentscope: TRACE
+  file:
+    name: logs/diagnosis-system-dev.log
+
+# 服务器配置
+server:
+  port: 8080
+
+# SpringDoc配置
+springdoc:
+  swagger-ui:
+    enabled: true
