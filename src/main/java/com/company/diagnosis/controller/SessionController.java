@@ -1,10 +1,18 @@
 package com.company.diagnosis.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.Map;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 会话管理控制器
@@ -25,159 +33,269 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/v1/sessions")
+@Tag(name = "会话管理", description = "管理诊断会话的生命周期")
 public class SessionController {
+
+    private static final Logger log = LoggerFactory.getLogger(SessionController.class);
+
+    /**
+     * 会话存储（简化实现,生产环境应使用持久化存储）
+     */
+    private final ConcurrentHashMap<String, Map<String, Object>> sessionStore = new ConcurrentHashMap<>();
 
     /**
      * 创建新会话
-     * <p>
-     * 功能说明：
-     * 创建一个新的诊断会话，返回会话ID
-     *
-     * @param metadata 会话元数据，包含用户信息、初始配置等
-     * @return 会话信息Map，包含sessionId、createTime等
      */
     @PostMapping
-    public Mono<Map<String, Object>> createSession(@RequestBody Map<String, Object> metadata) {
-        // TODO: 待实现
-        // 1. 验证元数据
-        // 2. 生成唯一sessionId
-        // 3. 初始化会话上下文
-        // 4. 持久化会话信息
-        return null;
+    @Operation(summary = "创建会话", description = "创建一个新的诊断会话,返回会话ID")
+    public Mono<Map<String, Object>> createSession(@RequestBody(required = false) Map<String, Object> metadata) {
+        log.info("创建新会话");
+
+        String sessionId = UUID.randomUUID().toString().replace("-", "");
+        Instant now = Instant.now();
+
+        Map<String, Object> session = new LinkedHashMap<>();
+        session.put("sessionId", sessionId);
+        session.put("status", "CREATED");
+        session.put("createdAt", now.toString());
+        session.put("updatedAt", now.toString());
+        session.put("metadata", metadata != null ? metadata : new HashMap<>());
+        session.put("context", new HashMap<>());
+        session.put("history", new ArrayList<>());
+
+        sessionStore.put(sessionId, session);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("sessionId", sessionId);
+        response.put("createdAt", now.toString());
+        response.put("message", "会话创建成功");
+
+        log.info("会话创建成功: sessionId={}", sessionId);
+        return Mono.just(response);
     }
 
     /**
      * 获取会话详情
-     * <p>
-     * 功能说明：
-     * 根据会话ID获取完整的会话信息
-     *
-     * @param sessionId 会话ID
-     * @return 会话详情Map，包含上下文、历史、状态等
      */
     @GetMapping("/{sessionId}")
+    @Operation(summary = "获取会话详情", description = "根据会话ID获取完整的会话信息")
     public Mono<Map<String, Object>> getSession(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 从存储中加载会话信息
-        // 3. 返回会话详情
-        return null;
+        log.info("获取会话详情: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            return Mono.just(errorResponse("会话ID不能为空"));
+        }
+
+        Map<String, Object> session = sessionStore.get(sessionId);
+        if (session == null) {
+            Map<String, Object> notFound = new LinkedHashMap<>();
+            notFound.put("success", false);
+            notFound.put("error", "会话不存在");
+            notFound.put("sessionId", sessionId);
+            return Mono.just(notFound);
+        }
+
+        return Mono.just(session);
     }
 
     /**
      * 获取会话上下文
-     * <p>
-     * 功能说明：
-     * 获取会话的DiagnosisContext对象
-     *
-     * @param sessionId 会话ID
-     * @return 诊断上下文Map
      */
     @GetMapping("/{sessionId}/context")
+    @Operation(summary = "获取会话上下文", description = "获取会话的DiagnosisContext对象")
     public Mono<Map<String, Object>> getSessionContext(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 获取DiagnosisContext
-        // 3. 转换为Map并返回
-        return null;
+        log.info("获取会话上下文: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            return Mono.just(errorResponse("会话ID不能为空"));
+        }
+
+        Map<String, Object> session = sessionStore.get(sessionId);
+        if (session == null) {
+            return Mono.just(errorResponse("会话不存在"));
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> context = (Map<String, Object>) session.getOrDefault("context", new HashMap<>());
+        
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("sessionId", sessionId);
+        response.put("context", context);
+
+        return Mono.just(response);
     }
 
     /**
      * 获取会话执行历史
-     * <p>
-     * 功能说明：
-     * 获取会话中所有层级的执行步骤历史
-     *
-     * @param sessionId 会话ID
-     * @return 执行历史列表
      */
     @GetMapping("/{sessionId}/history")
+    @Operation(summary = "获取执行历史", description = "获取会话中所有层级的执行步骤历史")
     public Flux<Map<String, Object>> getSessionHistory(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 获取stepsMemory
-        // 3. 按时间顺序返回历史记录
-        return null;
+        log.info("获取会话历史: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "会话ID不能为空");
+            return Flux.just(error);
+        }
+
+        Map<String, Object> session = sessionStore.get(sessionId);
+        if (session == null) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "会话不存在");
+            return Flux.just(error);
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> history = (List<Map<String, Object>>) session.getOrDefault("history", new ArrayList<>());
+
+        return Flux.fromIterable(history);
     }
 
     /**
      * 更新会话状态
-     * <p>
-     * 功能说明：
-     * 更新会话的状态信息
-     *
-     * @param sessionId 会话ID
-     * @param updates 更新内容
-     * @return 更新结果Map
      */
     @PutMapping("/{sessionId}")
+    @Operation(summary = "更新会话", description = "更新会话的状态信息")
     public Mono<Map<String, Object>> updateSession(
             @PathVariable String sessionId,
             @RequestBody Map<String, Object> updates) {
-        // TODO: 待实现
-        // 1. 验证sessionId和更新内容
-        // 2. 更新会话信息
-        // 3. 持久化更新
-        return null;
+        log.info("更新会话: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            return Mono.just(errorResponse("会话ID不能为空"));
+        }
+
+        Map<String, Object> session = sessionStore.get(sessionId);
+        if (session == null) {
+            return Mono.just(errorResponse("会话不存在"));
+        }
+
+        // 更新字段
+        if (updates != null) {
+            updates.forEach((key, value) -> {
+                if (!"sessionId".equals(key) && !"createdAt".equals(key)) {
+                    session.put(key, value);
+                }
+            });
+        }
+        session.put("updatedAt", Instant.now().toString());
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("sessionId", sessionId);
+        response.put("message", "会话更新成功");
+
+        return Mono.just(response);
     }
 
     /**
      * 删除会话
-     * <p>
-     * 功能说明：
-     * 删除指定的会话及其所有关联数据
-     *
-     * @param sessionId 会话ID
-     * @return 删除结果Map
      */
     @DeleteMapping("/{sessionId}")
+    @Operation(summary = "删除会话", description = "删除指定的会话及其所有关联数据")
     public Mono<Map<String, Object>> deleteSession(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 删除会话数据
-        // 3. 清理相关资源
-        return null;
+        log.info("删除会话: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            return Mono.just(errorResponse("会话ID不能为空"));
+        }
+
+        Map<String, Object> removed = sessionStore.remove(sessionId);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", removed != null);
+        response.put("sessionId", sessionId);
+        response.put("message", removed != null ? "会话删除成功" : "会话不存在");
+
+        return Mono.just(response);
     }
 
     /**
      * 查询会话列表
-     * <p>
-     * 功能说明：
-     * 分页查询会话列表，支持按状态、时间等条件过滤
-     *
-     * @param status 会话状态(可选)
-     * @param page 页码
-     * @param size 每页大小
-     * @return 分页结果Map
      */
     @GetMapping
+    @Operation(summary = "查询会话列表", description = "分页查询会话列表,支持按状态过滤")
     public Mono<Map<String, Object>> listSessions(
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "10") Integer size) {
-        // TODO: 待实现
-        // 1. 验证分页参数
-        // 2. 查询会话列表
-        // 3. 返回分页结果
-        return null;
+        log.info("查询会话列表: status={}, page={}, size={}", status, page, size);
+
+        List<Map<String, Object>> allSessions = new ArrayList<>(sessionStore.values());
+
+        // 过滤状态
+        if (StringUtils.hasText(status)) {
+            allSessions = allSessions.stream()
+                    .filter(s -> status.equalsIgnoreCase((String) s.get("status")))
+                    .toList();
+        }
+
+        // 分页
+        int total = allSessions.size();
+        int fromIndex = Math.max(0, (page - 1) * size);
+        int toIndex = Math.min(total, fromIndex + size);
+
+        List<Map<String, Object>> pagedSessions = fromIndex < total 
+                ? allSessions.subList(fromIndex, toIndex) 
+                : new ArrayList<>();
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("total", total);
+        response.put("page", page);
+        response.put("size", size);
+        response.put("totalPages", (total + size - 1) / size);
+        response.put("data", pagedSessions);
+
+        return Mono.just(response);
     }
 
     /**
      * 清理过期会话
-     * <p>
-     * 功能说明：
-     * 清理超过保留期限的会话数据
-     *
-     * @param daysToKeep 保留天数
-     * @return 清理结果Map，包含清理数量等
      */
     @PostMapping("/cleanup")
+    @Operation(summary = "清理过期会话", description = "清理超过保留期限的会话数据")
     public Mono<Map<String, Object>> cleanupSessions(
             @RequestParam(defaultValue = "30") Integer daysToKeep) {
-        // TODO: 待实现
-        // 1. 查询过期会话
-        // 2. 批量删除
-        // 3. 返回清理统计
-        return null;
+        log.info("清理过期会话: daysToKeep={}", daysToKeep);
+
+        Instant cutoff = Instant.now().minus(daysToKeep, ChronoUnit.DAYS);
+        int cleanedCount = 0;
+
+        Iterator<Map.Entry<String, Map<String, Object>>> iterator = sessionStore.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, Map<String, Object>> entry = iterator.next();
+            String createdAt = (String) entry.getValue().get("createdAt");
+            if (createdAt != null) {
+                try {
+                    Instant sessionTime = Instant.parse(createdAt);
+                    if (sessionTime.isBefore(cutoff)) {
+                        iterator.remove();
+                        cleanedCount++;
+                    }
+                } catch (Exception e) {
+                    // 解析失败,跳过
+                }
+            }
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("cleanedCount", cleanedCount);
+        response.put("daysToKeep", daysToKeep);
+        response.put("remainingCount", sessionStore.size());
+        response.put("timestamp", Instant.now().toString());
+
+        log.info("会话清理完成: cleaned={}, remaining={}", cleanedCount, sessionStore.size());
+        return Mono.just(response);
+    }
+
+    private Map<String, Object> errorResponse(String message) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", false);
+        response.put("error", message);
+        response.put("timestamp", Instant.now().toString());
+        return response;
     }
 }

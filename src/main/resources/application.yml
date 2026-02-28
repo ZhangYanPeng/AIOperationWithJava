@@ -63,6 +63,13 @@ elasticsearch:
 
 # LLM模型配置
 llm:
+  # 硅基流动配置(免费在线API)
+  siliconflow:
+    api-key: ${SILICONFLOW_API_KEY:your-api-key}
+    base-url: https://api.siliconflow.cn/v1
+    default-model: deepseek-ai/DeepSeek-V3
+    timeout: 300
+  
   # DashScope配置(阿里云百炼)
   dashscope:
     api-key: ${DASHSCOPE_API_KEY:your-api-key}
@@ -83,197 +90,17 @@ llm:
     default-model: llama2
     timeout: 300
   
-  # 通用配置
-  default-provider: dashscope
+  # 通用配置 - 默认使用硅基流动
+  default-provider: ${LLM_PROVIDER:siliconflow}
   temperature: 0.2
   max-tokens: 2000
   top-p: 0.9
   enable-thinking: false
   streaming: true
 
-# 外部工具API配置
+# 外部工具API配置（模拟网管）
 tool-api:
-  base-url: ${TOOL_API_BASE_URL:http://localhost:8080}
-  timeout: 60000
-  retry:
-    max-attempts: 3
-    backoff-delay: 1000
-
-# 知识库配置
-knowledge:
-  base-path: knowledge-base
-  upload-path: ${knowledge.base-path}/uploads
-  max-file-size: 100MB
-  allowed-extensions:
-    - md
-    - txt
-    - docx
-    - pdf
-    - xlsx
-
-# 诊断系统配置
-diagnosis:
-  session:
-    timeout: 3600000  # 1小时
-    max-concurrent: 100
-  agent:
-    max-retries: 3
-    timeout: 300000  # 5分钟
-    backoff-delay: 1000
-  sse:
-    heartbeat-interval: 30000  # 30秒
-    timeout: 600000  # 10分钟
-
-# SpringDoc OpenAPI配置
-springdoc:
-  api-docs:
-    enabled: true
-    path: /v3/api-docs
-  swagger-ui:
-    enabled: true
-    path: /swagger-ui.html
-    tags-sorter: alpha
-    operations-sorter: alpha
-  packages-to-scan: com.company.diagnosis.controller
-  paths-to-match: /api/**
-
-# 管理端点配置
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics,prometheus
-      base-path: /actuator
-  endpoint:
-    health:
-      show-details: when-authorized
-  metrics:
-    export:
-      prometheus:
-        enabled: true
-
-# 日志配置
-logging:
-  level:
-    root: INFO
-    com.company.diagnosis: DEBUG
-    org.springframework: INFO
-    org.elasticsearch: WARN
-    org.apache.kafka: WARN
-    io.agentscope: DEBUG
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
-    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
-  file:
-    name: logs/diagnosis-system.log
-    max-size: 100MB
-    max-history: 30
-    total-size-cap: 1GB
-
-# 服务器配置
-server:
-  port: ${SERVER_PORT:8080}
-  compression:
-    enabled: true
-    mime-types: text/html,text/xml,text/plain,text/css,text/javascript,application/javascript,application/json
-  http2:
-    enabled: true
-spring:
-  application:
-    name: diagnosis-system
-  
-  # Web配置
-  web:
-    resources:
-      add-mappings: true
-  
-  # WebFlux配置
-  webflux:
-    base-path: /api
-  
-  # Servlet配置
-  servlet:
-    multipart:
-      enabled: true
-      max-file-size: 100MB
-      max-request-size: 100MB
-  
-  # Jackson配置
-  jackson:
-    serialization:
-      write-dates-as-timestamps: false
-      indent-output: true
-    deserialization:
-      fail-on-unknown-properties: false
-    time-zone: Asia/Shanghai
-    date-format: yyyy-MM-dd'T'HH:mm:ss.SSS'Z'
-  
-  # Kafka配置
-  kafka:
-    bootstrap-servers: ${KAFKA_SERVERS:localhost:9092}
-    consumer:
-      group-id: diagnosis-agent-group
-      auto-offset-reset: latest
-      enable-auto-commit: false
-      max-poll-records: 1
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      acks: all
-      retries: 3
-    listener:
-      ack-mode: manual
-
-# Elasticsearch配置
-elasticsearch:
-  host: ${ES_HOST:localhost}
-  port: ${ES_PORT:9200}
-  username: ${ES_USERNAME:elastic}
-  password: ${ES_PASSWORD:changeme}
-  connection-timeout: 30000
-  socket-timeout: 60000
-  indices:
-    tool-interface: kb_tool_interface
-    diagnosis-manual: kb_diagnosis_manual
-    reasoning-rule: kb_reasoning_rule
-    conclusion-analysis: kb_conclusion_analysis
-    domain-knowledge: kb_domain_knowledge
-
-# LLM模型配置
-llm:
-  # DashScope配置(阿里云百炼)
-  dashscope:
-    api-key: ${DASHSCOPE_API_KEY:your-api-key}
-    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    default-model: qwen-max
-    timeout: 300
-  
-  # OpenAI兼容配置
-  openai:
-    api-key: ${OPENAI_API_KEY:your-api-key}
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
-    default-model: gpt-4
-    timeout: 300
-  
-  # Ollama配置(本地模型)
-  ollama:
-    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
-    default-model: llama2
-    timeout: 300
-  
-  # 通用配置
-  default-provider: dashscope
-  temperature: 0.2
-  max-tokens: 2000
-  top-p: 0.9
-  enable-thinking: false
-  streaming: true
-
-# 外部工具API配置
-tool-api:
-  base-url: ${TOOL_API_BASE_URL:http://localhost:8080}
+  base-url: ${TOOL_API_BASE_URL:http://localhost:8081}
   timeout: 60000
   retry:
     max-attempts: 3

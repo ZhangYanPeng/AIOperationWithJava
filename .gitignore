@@ -76,6 +76,9 @@ test_*.py
 test_*.html
 test_*.ps1
 
+# Test configuration with sensitive keys
+application-test.properties
+
 # Deployment scripts
 deploy_*.ps1
 fix_*.sh

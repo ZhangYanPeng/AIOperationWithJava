@@ -1,8 +1,8 @@
 package com.company.diagnosis.model.dto;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.Data;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -11,6 +11,7 @@ import java.util.Map;
  * 功能描述:
  * - 定义诊断请求的输入参数
  * - 支持参数校验
+ * - 支持多种输入来源（HTTP、Kafka）
  * 
  * @author System
  * @since 2026-01-13
@@ -29,16 +30,25 @@ public class DiagnosisRequest {
     private String sessionId;
 
     /**
-     * 诊断类型(必填)
+     * 告警ID(必填,唯一标识告警)
      */
-    @NotBlank(message = "诊断类型不能为空")
+    @NotBlank(message = "告警ID不能为空")
+    private String alertId;
+
+    /**
+     * 诊断类型(可选)
+     */
     private String diagnosisType;
 
     /**
-     * 问题描述(必填)
+     * 问题描述(可选)
      */
-    @NotBlank(message = "问题描述不能为空")
     private String problem;
+
+    /**
+     * 告警原始数据
+     */
+    private Map<String, Object> alertData;
 
     /**
      * 初始参数(可选)
@@ -47,122 +57,108 @@ public class DiagnosisRequest {
     private Map<String, Object> parameters;
 
     /**
-     * 诊断选项(可选)
+     * 诊断选项
      */
-    private DiagnosisOptions options;
+    private Map<String, Object> options;
 
     /**
-     * 诊断选项类
+     * 获取或创建选项Map
+     * 
+     * @return 选项Map
      */
-    @Data
-    public static class DiagnosisOptions {
-        /**
-         * 是否启用深度分析
-         */
-        private Boolean enableDeepAnalysis;
-
-        /**
-         * 是否需要专家意见
-         */
-        private Boolean requireExpertOpinion;
-
-        /**
-         * 超时时间(毫秒)
-         */
-        private Long timeout;
-
-        /**
-         * 是否流式输出
-         */
-        private Boolean streaming;
-
-        /**
-         * 最大步骤数
-         */
-        private Integer maxSteps;
+    public Map<String, Object> getOptions() {
+        if (options == null) {
+            options = new HashMap<>();
+        }
+        return options;
     }
-}
-package com.company.diagnosis.model.dto;
-
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import lombok.Data;
-import java.util.Map;
-
-/**
- * 诊断请求DTO
- * 
- * 功能描述:
- * - 定义诊断请求的输入参数
- * - 支持参数校验
- * 
- * @author System
- * @since 2026-01-13
- */
-@Data
-public class DiagnosisRequest {
 
     /**
-     * 请求ID(可选,如果不提供则自动生成)
+     * 获取或创建参数Map
+     * 
+     * @return 参数Map
      */
-    private String requestId;
+    public Map<String, Object> getParameters() {
+        if (parameters == null) {
+            parameters = new HashMap<>();
+        }
+        return parameters;
+    }
 
     /**
-     * 会话ID(可选,用于关联会话)
+     * 获取或创建告警数据Map
+     * 
+     * @return 告警数据Map
      */
-    private String sessionId;
+    public Map<String, Object> getAlertData() {
+        if (alertData == null) {
+            alertData = new HashMap<>();
+        }
+        return alertData;
+    }
 
     /**
-     * 诊断类型(必填)
+     * 便捷方法：从parameters获取设备ID
+     * 
+     * @return 设备ID，如不存在返回null
      */
-    @NotBlank(message = "诊断类型不能为空")
-    private String diagnosisType;
+    public String getDeviceId() {
+        return parameters != null ? (String) parameters.get("deviceId") : null;
+    }
 
     /**
-     * 问题描述(必填)
+     * 便捷方法：设置设备ID
+     * 
+     * @param deviceId 设备ID
      */
-    @NotBlank(message = "问题描述不能为空")
-    private String problem;
+    public void setDeviceId(String deviceId) {
+        getParameters().put("deviceId", deviceId);
+    }
 
     /**
-     * 初始参数(可选)
-     * 可包含设备ID、通道信息、时间范围等
+     * 便捷方法：判断是否启用流式输出
+     * 
+     * @return 是否启用流式输出
      */
-    private Map<String, Object> parameters;
+    public boolean isStreamingEnabled() {
+        if (options == null) {
+            return false;
+        }
+        Object streaming = options.get("streaming");
+        return Boolean.TRUE.equals(streaming);
+    }
 
     /**
-     * 诊断选项(可选)
+     * 便捷方法：获取超时时间
+     * 
+     * @return 超时时间（毫秒），默认300000
      */
-    private DiagnosisOptions options;
+    public long getTimeout() {
+        if (options == null) {
+            return 300000L;
+        }
+        Object timeout = options.get("timeout");
+        if (timeout instanceof Number) {
+            return ((Number) timeout).longValue();
+        }
+        return 300000L;
+    }
 
     /**
-     * 诊断选项类
+     * 获取问题描述
+     * 
+     * @return 问题描述
      */
-    @Data
-    public static class DiagnosisOptions {
-        /**
-         * 是否启用深度分析
-         */
-        private Boolean enableDeepAnalysis;
+    public String getProblemDescription() {
+        return problem;
+    }
 
-        /**
-         * 是否需要专家意见
-         */
-        private Boolean requireExpertOpinion;
-
-        /**
-         * 超时时间(毫秒)
-         */
-        private Long timeout;
-
-        /**
-         * 是否流式输出
-         */
-        private Boolean streaming;
-
-        /**
-         * 最大步骤数
-         */
-        private Integer maxSteps;
+    /**
+     * 设置问题描述
+     * 
+     * @param problemDescription 问题描述
+     */
+    public void setProblemDescription(String problemDescription) {
+        this.problem = problemDescription;
     }
 }

@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  # Elasticsearch 服务（内存优化版，适合4GB内存环境）
+  elasticsearch:
+    image: elasticsearch:8.17.0
+    container_name: diagnosis-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - diagnosis-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  es-data:
+    driver: local
+
+networks:
+  diagnosis-network:
+    driver: bridge

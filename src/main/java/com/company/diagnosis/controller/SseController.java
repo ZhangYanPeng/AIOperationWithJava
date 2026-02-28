@@ -1,10 +1,19 @@
 package com.company.diagnosis.controller;
 
+import com.company.diagnosis.service.SseConnectionManager;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -27,130 +36,153 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/v1/sse")
+@Tag(name = "SSE连接管理", description = "管理Server-Sent Events连接")
 public class SseController {
+
+    private static final Logger log = LoggerFactory.getLogger(SseController.class);
+
+    @Autowired
+    private SseConnectionManager sseConnectionManager;
 
     /**
      * 建立SSE连接
-     * <p>
-     * 功能说明：
-     * 建立SSE长连接，用于接收诊断过程的实时推送
-     *
-     * @param sessionId 会话ID
-     * @return SSE事件流
      */
     @GetMapping(value = "/connect/{sessionId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "建立SSE连接", description = "建立SSE长连接,用于接收诊断过程的实时推送")
     public Flux<Map<String, Object>> connect(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 注册SSE连接到SseConnectionManager
-        // 3. 返回事件流(包含心跳)
-        return null;
+        log.info("建立SSE连接: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("type", "error");
+            error.put("error", "会话ID不能为空");
+            return Flux.just(error);
+        }
+
+        return sseConnectionManager.registerConnection(sessionId)
+                .doOnSubscribe(s -> log.info("SSE连接已建立: sessionId={}", sessionId))
+                .doOnCancel(() -> log.info("SSE连接已取消: sessionId={}", sessionId))
+                .doOnComplete(() -> log.info("SSE连接已完成: sessionId={}", sessionId));
     }
 
     /**
      * 向指定会话推送消息
-     * <p>
-     * 功能说明：
-     * 向指定会话的所有SSE连接推送消息
-     *
-     * @param sessionId 会话ID
-     * @param message 消息内容
-     * @return 推送结果Map
      */
     @PostMapping("/send/{sessionId}")
+    @Operation(summary = "发送消息", description = "向指定会话的所有SSE连接推送消息")
     public Mono<Map<String, Object>> sendMessage(
             @PathVariable String sessionId,
             @RequestBody Map<String, Object> message) {
-        // TODO: 待实现
-        // 1. 验证sessionId和消息格式
-        // 2. 调用SseConnectionManager.sendToSession()
-        // 3. 返回推送结果
-        return null;
+        log.info("发送SSE消息: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            return Mono.just(errorResponse("会话ID不能为空"));
+        }
+
+        if (message == null || message.isEmpty()) {
+            return Mono.just(errorResponse("消息内容不能为空"));
+        }
+
+        return sseConnectionManager.sendToSession(sessionId, message)
+                .map(success -> {
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("success", success);
+                    result.put("sessionId", sessionId);
+                    result.put("timestamp", Instant.now().toString());
+                    return result;
+                });
     }
 
     /**
      * 广播消息到所有连接
-     * <p>
-     * 功能说明：
-     * 向所有活跃的SSE连接广播消息
-     *
-     * @param message 广播消息内容
-     * @return 广播结果Map，包含接收者数量等
      */
     @PostMapping("/broadcast")
+    @Operation(summary = "广播消息", description = "向所有活跃的SSE连接广播消息")
     public Mono<Map<String, Object>> broadcast(@RequestBody Map<String, Object> message) {
-        // TODO: 待实现
-        // 1. 验证消息格式
-        // 2. 调用SseConnectionManager.broadcast()
-        // 3. 返回广播统计
-        return null;
+        log.info("广播SSE消息");
+
+        if (message == null || message.isEmpty()) {
+            return Mono.just(errorResponse("消息内容不能为空"));
+        }
+
+        return sseConnectionManager.broadcast(message);
     }
 
     /**
      * 关闭SSE连接
-     * <p>
-     * 功能说明：
-     * 主动关闭指定会话的SSE连接
-     *
-     * @param sessionId 会话ID
-     * @return 关闭结果Map
      */
     @PostMapping("/close/{sessionId}")
+    @Operation(summary = "关闭连接", description = "主动关闭指定会话的SSE连接")
     public Mono<Map<String, Object>> closeConnection(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 调用SseConnectionManager.closeConnection()
-        // 3. 返回关闭结果
-        return null;
+        log.info("关闭SSE连接: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            return Mono.just(errorResponse("会话ID不能为空"));
+        }
+
+        return sseConnectionManager.closeConnection(sessionId)
+                .map(success -> {
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("success", success);
+                    result.put("sessionId", sessionId);
+                    result.put("message", success ? "连接已关闭" : "连接不存在");
+                    result.put("timestamp", Instant.now().toString());
+                    return result;
+                });
     }
 
     /**
      * 获取连接状态
-     * <p>
-     * 功能说明：
-     * 查询指定会话的SSE连接状态
-     *
-     * @param sessionId 会话ID
-     * @return 连接状态Map，包含isConnected、connectTime等
      */
     @GetMapping("/status/{sessionId}")
+    @Operation(summary = "获取连接状态", description = "查询指定会话的SSE连接状态")
     public Mono<Map<String, Object>> getConnectionStatus(@PathVariable String sessionId) {
-        // TODO: 待实现
-        // 1. 验证sessionId
-        // 2. 查询连接状态
-        // 3. 返回状态信息
-        return null;
+        log.info("查询SSE连接状态: sessionId={}", sessionId);
+
+        if (!StringUtils.hasText(sessionId)) {
+            return Mono.just(errorResponse("会话ID不能为空"));
+        }
+
+        Map<String, Object> status = new HashMap<>();
+        status.put("sessionId", sessionId);
+        status.put("isConnected", sseConnectionManager.isConnectionActive(sessionId));
+        status.put("timestamp", Instant.now().toString());
+
+        return Mono.just(status);
     }
 
     /**
      * 获取所有活跃连接
-     * <p>
-     * 功能说明：
-     * 获取当前所有活跃的SSE连接信息
-     *
-     * @return 连接列表，每项包含sessionId、connectTime等
      */
     @GetMapping("/connections")
+    @Operation(summary = "获取活跃连接列表", description = "获取当前所有活跃的SSE连接信息")
     public Flux<Map<String, Object>> listActiveConnections() {
-        // TODO: 待实现
-        // 1. 调用SseConnectionManager.listConnections()
-        // 2. 返回活跃连接列表
-        return null;
+        log.info("获取活跃SSE连接列表");
+
+        return sseConnectionManager.listActiveConnections()
+                .map(sessionId -> {
+                    Map<String, Object> conn = new HashMap<>();
+                    conn.put("sessionId", sessionId);
+                    conn.put("isActive", true);
+                    return conn;
+                });
     }
 
     /**
      * 获取连接统计信息
-     * <p>
-     * 功能说明：
-     * 获取SSE连接的统计信息
-     *
-     * @return 统计信息Map，包含总连接数、活跃数等
      */
     @GetMapping("/statistics")
+    @Operation(summary = "获取连接统计", description = "获取SSE连接的统计信息")
     public Mono<Map<String, Object>> getStatistics() {
-        // TODO: 待实现
-        // 1. 调用SseConnectionManager.getStatistics()
-        // 2. 返回统计信息
-        return null;
+        log.info("获取SSE连接统计");
+        return sseConnectionManager.getStatistics();
+    }
+
+    private Map<String, Object> errorResponse(String message) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", false);
+        response.put("error", message);
+        response.put("timestamp", Instant.now().toString());
+        return response;
     }
 }

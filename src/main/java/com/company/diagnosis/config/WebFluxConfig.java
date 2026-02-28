@@ -1,7 +1,14 @@
 package com.company.diagnosis.config;
 
+import io.netty.channel.ChannelOption;
+import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.handler.timeout.WriteTimeoutHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.http.codec.ServerCodecConfigurer;
 import org.springframework.web.reactive.config.CorsRegistry;
 import org.springframework.web.reactive.config.EnableWebFlux;
@@ -9,6 +16,10 @@ import org.springframework.web.reactive.config.WebFluxConfigurer;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+import reactor.netty.http.client.HttpClient;
+
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 /**
  * WebFlux配置类
@@ -32,6 +43,14 @@ import reactor.core.scheduler.Schedulers;
 @EnableWebFlux
 public class WebFluxConfig implements WebFluxConfigurer {
 
+    private static final Logger log = LoggerFactory.getLogger(WebFluxConfig.class);
+
+    @Value("${tool-api.base-url:http://localhost:8080}")
+    private String toolApiBaseUrl;
+
+    @Value("${tool-api.timeout:60000}")
+    private int toolApiTimeout;
+
     /**
      * 配置CORS跨域
      * 
@@ -44,13 +63,16 @@ public class WebFluxConfig implements WebFluxConfigurer {
      */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        // TODO: 待实现
-        // 1. registry.addMapping("/**")
-        // 2. allowedOrigins("*")或指定具体域名
-        // 3. allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-        // 4. allowedHeaders("*")
-        // 5. allowCredentials(true)
-        // 6. maxAge(3600)
+        registry.addMapping("/**")
+                .allowedOriginPatterns("*")
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD")
+                .allowedHeaders("*")
+                .exposedHeaders("Content-Type", "X-Requested-With", "Accept", 
+                        "Authorization", "Cache-Control", "Content-Disposition")
+                .allowCredentials(true)
+                .maxAge(3600);
+        
+        log.info("CORS配置完成: 允许所有源访问");
     }
 
     /**
@@ -63,29 +85,35 @@ public class WebFluxConfig implements WebFluxConfigurer {
      */
     @Override
     public void configureHttpMessageCodecs(ServerCodecConfigurer configurer) {
-        // TODO: 待实现
-        // 1. 设置内存缓冲区大小
-        // 2. configurer.defaultCodecs().maxInMemorySize(100 * 1024 * 1024)
+        // 设置内存缓冲区大小为100MB,支持大文件上传
+        configurer.defaultCodecs().maxInMemorySize(100 * 1024 * 1024);
+        log.info("HTTP编解码器配置完成: maxInMemorySize=100MB");
     }
 
     /**
      * 创建WebClient HTTP客户端
      * 
      * 功能说明:
-     * 创建响应式HTTP客户端,用于调用外部Tool API
+     * 创建响应式HTTP客户端,用于调用外部API
      * 
      * @return WebClient 响应式HTTP客户端
      */
     @Bean
     public WebClient webClient() {
-        // TODO: 待实现
-        // 1. 创建WebClient.builder()
-        // 2. 配置baseUrl(如果有默认值)
-        // 3. 配置超时参数
-        // 4. 配置连接池参数
-        // 5. 配置编解码器
-        // 6. 返回build()
-        return null;
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 30000)
+                .responseTimeout(Duration.ofSeconds(60))
+                .doOnConnected(conn -> conn
+                        .addHandlerLast(new ReadTimeoutHandler(60, TimeUnit.SECONDS))
+                        .addHandlerLast(new WriteTimeoutHandler(60, TimeUnit.SECONDS)));
+
+        WebClient client = WebClient.builder()
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(50 * 1024 * 1024))
+                .build();
+        
+        log.info("默认WebClient创建完成: connectTimeout=30s, responseTimeout=60s");
+        return client;
     }
 
     /**
@@ -98,13 +126,23 @@ public class WebFluxConfig implements WebFluxConfigurer {
      */
     @Bean("toolApiWebClient")
     public WebClient toolApiWebClient() {
-        // TODO: 待实现
-        // 1. 创建WebClient.builder()
-        // 2. 从配置读取tool-api.base-url
-        // 3. 配置超时为tool-api.timeout
-        // 4. 配置重试策略
-        // 5. 返回build()
-        return null;
+        int timeoutSeconds = toolApiTimeout / 1000;
+        
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 30000)
+                .responseTimeout(Duration.ofSeconds(timeoutSeconds))
+                .doOnConnected(conn -> conn
+                        .addHandlerLast(new ReadTimeoutHandler(timeoutSeconds, TimeUnit.SECONDS))
+                        .addHandlerLast(new WriteTimeoutHandler(timeoutSeconds, TimeUnit.SECONDS)));
+
+        WebClient client = WebClient.builder()
+                .baseUrl(toolApiBaseUrl)
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(10 * 1024 * 1024))
+                .build();
+        
+        log.info("工具API WebClient创建完成: baseUrl={}, timeout={}s", toolApiBaseUrl, timeoutSeconds);
+        return client;
     }
 
     /**
@@ -117,12 +155,11 @@ public class WebFluxConfig implements WebFluxConfigurer {
      */
     @Bean("parallelScheduler")
     public Scheduler parallelScheduler() {
-        // TODO: 待实现
-        // 1. 计算合适的线程池大小
-        // 2. 创建Schedulers.newParallel()或newBoundedElastic()
-        // 3. 配置线程名称前缀
-        // 4. 返回scheduler
-        return null;
+        // 使用CPU核心数作为并行度
+        int parallelism = Runtime.getRuntime().availableProcessors();
+        Scheduler scheduler = Schedulers.newParallel("diagnosis-parallel", parallelism);
+        log.info("并行调度器创建完成: parallelism={}", parallelism);
+        return scheduler;
     }
 
     /**
@@ -135,11 +172,14 @@ public class WebFluxConfig implements WebFluxConfigurer {
      */
     @Bean("ioScheduler")
     public Scheduler ioScheduler() {
-        // TODO: 待实现
-        // 1. 创建Schedulers.boundedElastic()
-        // 2. 配置线程名称前缀
-        // 3. 返回scheduler
-        return null;
+        // boundedElastic适合I/O密集型任务,有界弹性线程池
+        Scheduler scheduler = Schedulers.newBoundedElastic(
+                Schedulers.DEFAULT_BOUNDED_ELASTIC_SIZE,
+                Schedulers.DEFAULT_BOUNDED_ELASTIC_QUEUESIZE,
+                "diagnosis-io"
+        );
+        log.info("I/O调度器创建完成: boundedElastic");
+        return scheduler;
     }
 
     /**
@@ -152,11 +192,10 @@ public class WebFluxConfig implements WebFluxConfigurer {
      */
     @Bean("sseScheduler")
     public Scheduler sseScheduler() {
-        // TODO: 待实现
-        // 1. 创建合适的调度器
-        // 2. 配置线程池大小
-        // 3. 配置线程名称前缀
-        // 4. 返回scheduler
-        return null;
+        // SSE推送使用单独的线程池,避免影响其他操作
+        int sseThreads = Math.max(4, Runtime.getRuntime().availableProcessors() / 2);
+        Scheduler scheduler = Schedulers.newParallel("diagnosis-sse", sseThreads);
+        log.info("SSE调度器创建完成: threads={}", sseThreads);
+        return scheduler;
     }
 }

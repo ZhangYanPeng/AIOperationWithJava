@@ -1,0 +1,10 @@
+# Test configuration
+spring:
+  main:
+    allow-bean-definition-overriding: true
+    lazy-initialization: true
+
+logging:
+  level:
+    root: WARN
+    com.company.diagnosis: DEBUG

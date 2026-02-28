@@ -1,13 +1,19 @@
 package com.company.diagnosis.agent.base;
 
-import com.agentscope.agent.AgentBase;
-import com.agentscope.message.Msg;
+import com.company.diagnosis.config.AgentScopeConfig.LlmClientRegistry;
+import com.company.diagnosis.llm.LlmClient;
+import com.company.diagnosis.llm.LlmResponse;
+import com.company.diagnosis.service.KnowledgeService;
+import com.company.diagnosis.util.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -25,31 +31,36 @@ import java.util.Optional;
  * - 基类只提供通用能力，不包含具体业务逻辑
  * - 所有方法使用protected前缀，不影响子类对外接口
  * - 统一异常处理和日志记录
- * - 符合AgentScope推荐模式：继承AgentBase，实现reply()方法
+ * - 符合AgentScope推荐模式：实现reply()方法
  * 
  * @author AIOperation Team
  * @since 2026-01-13
  */
-public abstract class BaseIntelligentAgent extends AgentBase {
+public abstract class BaseIntelligentAgent {
     
     protected static final Logger logger = LoggerFactory.getLogger(BaseIntelligentAgent.class);
     
     /**
      * 智能体名称
      */
-    protected String agentName;
+    protected final String agentName;
+
+    /**
+     * 执行记录（用于记录当前执行的详细信息）
+     */
+    protected final ThreadLocal<ExecutionTrace> executionTrace = ThreadLocal.withInitial(ExecutionTrace::new);
     
     /**
      * 知识检索服务（注入）
      */
-    @Autowired
+    @Autowired(required = false)
     protected KnowledgeService knowledgeService;
     
     /**
-     * LLM客户端（注入）
+     * LLM客户端注册表（注入）
      */
-    @Autowired
-    protected LlmClient llmClient;
+    @Autowired(required = false)
+    protected LlmClientRegistry llmClientRegistry;
     
     /**
      * 构造函数
@@ -57,9 +68,8 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param agentName 智能体名称
      */
     public BaseIntelligentAgent(String agentName) {
-        super();
         this.agentName = agentName;
-        logger.info("智能体 {} 初始化成功", agentName);
+        logger.info("智能体 {} 初始化", agentName);
     }
     
     // ==================== 知识检索方法 ====================
@@ -70,7 +80,7 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * 功能：从ES知识库检索相关知识
      * 
      * @param query 查询文本
-     * @param agentType 知识类型
+     * @param knowledgeType 知识类型
      *                  - "tool": 工具接口规范
      *                  - "diagnosis": 诊断策略
      *                  - "reasoning": 推理规则
@@ -79,23 +89,54 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param topK 返回结果数量
      * @param fallbackMessage 未找到结果时的默认消息
      * @return Mono<String> 知识内容字符串
-     * 
-     * 实现方式：
-     * 1. 调用knowledgeService.retrieve()查询ES
-     * 2. 解析返回结果，提取content字段
-     * 3. 如果未找到，返回fallbackMessage
-     * 4. 异常时记录日志并返回fallbackMessage
      */
     protected Mono<String> retrieveKnowledge(
             String query, 
-            String agentType, 
+            String knowledgeType, 
             int topK, 
             String fallbackMessage) {
-        // TODO: 实现知识检索逻辑
-        return Mono.just(fallbackMessage);
+        
+        if (knowledgeService == null) {
+            logger.warn("[{}] KnowledgeService未注入,返回默认消息", agentName);
+            return Mono.just(fallbackMessage);
+        }
+        
+        logger.debug("[{}] 开始知识检索: type={}, query={}", agentName, knowledgeType, query);
+        
+        return knowledgeService.searchDocuments(query, knowledgeType, topK, "keyword")
+                .map(doc -> {
+                    // 提取content字段
+                    Object content = doc.get("content");
+                    return content != null ? content.toString() : "";
+                })
+                .filter(content -> !content.isEmpty())
+                .collectList()
+                .map(contents -> {
+                    if (contents.isEmpty()) {
+                        logger.info("[{}] 未检索到相关知识,使用默认消息", agentName);
+                        return fallbackMessage;
+                    }
+                    String result = String.join("\n\n---\n\n", contents);
+                    logger.debug("[{}] 检索到{}条知识记录", agentName, contents.size());
+                    return result;
+                })
+                .onErrorResume(e -> {
+                    logger.error("[{}] 知识检索失败: {}", agentName, e.getMessage());
+                    return Mono.just(fallbackMessage);
+                });
     }
     
     // ==================== LLM调用方法 ====================
+    
+    /**
+     * 获取LLM客户端
+     */
+    protected LlmClient getLlmClient() {
+        if (llmClientRegistry == null) {
+            throw new IllegalStateException("LlmClientRegistry未注入");
+        }
+        return llmClientRegistry.getDefaultClient();
+    }
     
     /**
      * 调用LLM获取JSON格式输出
@@ -106,24 +147,46 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param systemPrompt 系统提示词（可选）
      * @param temperature 温度参数（0.0-1.0）
      * @param retryOnFailure 失败重试次数
-     * @return Mono<LlmResponse> LLM响应对象
-     *         - success: Boolean（是否成功）
-     *         - data: Map（解析后的JSON数据）
-     *         - error: String（错误信息）
-     * 
-     * 实现方式：
-     * 1. 构造请求对象（包含prompt、systemPrompt、temperature）
-     * 2. 循环重试：调用llmClient.generateJson()
-     * 3. 解析响应，验证JSON格式
-     * 4. 失败时记录日志，达到重试上限后返回错误
+     * @return Mono<AgentLlmResponse> LLM响应对象
      */
-    protected Mono<LlmResponse> callLlmJson(
+    protected Mono<AgentLlmResponse> callLlmJson(
             String prompt, 
             String systemPrompt, 
             double temperature, 
             int retryOnFailure) {
-        // TODO: 实现LLM JSON调用逻辑
-        return Mono.just(new LlmResponse(false, null, "Not implemented"));
+        
+        logger.debug("[{}] 调用LLM JSON: temperature={}, retries={}", agentName, temperature, retryOnFailure);
+        
+        // 记录LLM输入
+        executionTrace.get().recordLlmInput(prompt);
+        
+        if (llmClientRegistry == null) {
+            logger.error("[{}] LlmClientRegistry未注入", agentName);
+            return Mono.just(new AgentLlmResponse(false, null, "LLM客户端未配置"));
+        }
+        
+        LlmClient client = getLlmClient();
+        
+        return client.generateJson(prompt, systemPrompt, temperature)
+                .map(response -> {
+                    if (response.isSuccess()) {
+                        logger.debug("[{}] LLM调用成功", agentName);
+                        // 记录LLM输出
+                        String output = JsonUtil.toJson(response.getParsedJson());
+                        executionTrace.get().recordLlmOutput(output);
+                        return new AgentLlmResponse(true, response.getParsedJson(), null);
+                    } else {
+                        logger.warn("[{}] LLM返回错误: {}", agentName, response.getError());
+                        executionTrace.get().recordLlmOutput("Error: " + response.getError());
+                        return new AgentLlmResponse(false, null, response.getError());
+                    }
+                })
+                .retry(retryOnFailure)
+                .onErrorResume(e -> {
+                    logger.error("[{}] LLM调用异常: {}", agentName, e.getMessage());
+                    executionTrace.get().recordLlmOutput("Exception: " + e.getMessage());
+                    return Mono.just(new AgentLlmResponse(false, null, e.getMessage()));
+                });
     }
     
     /**
@@ -135,19 +198,25 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param systemPrompt 系统提示词（可选）
      * @param temperature 温度参数（0.0-1.0）
      * @return Flux<String> 文本片段流
-     * 
-     * 实现方式：
-     * 1. 构造请求对象
-     * 2. 调用llmClient.streamText()获取Flux流
-     * 3. 过滤空片段
-     * 4. 异常时记录日志，返回空流
      */
     protected Flux<String> callLlmStream(
             String prompt, 
             String systemPrompt, 
             double temperature) {
-        // TODO: 实现LLM流式调用逻辑
-        return Flux.empty();
+        
+        logger.debug("[{}] 调用LLM流式输出: temperature={}", agentName, temperature);
+        
+        if (llmClientRegistry == null) {
+            logger.error("[{}] LlmClientRegistry未注入", agentName);
+            return Flux.empty();
+        }
+        
+        LlmClient client = getLlmClient();
+        
+        return client.streamText(prompt, systemPrompt, temperature)
+                .filter(text -> text != null && !text.isEmpty())
+                .doOnError(e -> logger.error("[{}] LLM流式调用异常: {}", agentName, e.getMessage()))
+                .onErrorResume(e -> Flux.empty());
     }
     
     // ==================== 事件推送方法 ====================
@@ -160,16 +229,19 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param eventType 事件类型（如"agent_thinking"、"knowledge_retrieved"）
      * @param data 事件数据（键值对）
      * @return Map<String, Object> 事件字典
-     * 
-     * 实现方式：
-     * 1. 创建Map对象
-     * 2. 添加type、agent、timestamp字段
-     * 3. 合并传入的data
-     * 4. 返回完整事件对象
      */
     protected Map<String, Object> yieldEvent(String eventType, Map<String, Object> data) {
-        // TODO: 实现事件推送逻辑
-        return Map.of("type", eventType, "agent", agentName);
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", eventType);
+        event.put("agent", agentName);
+        event.put("timestamp", Instant.now().toString());
+        
+        if (data != null) {
+            event.putAll(data);
+        }
+        
+        logger.debug("[{}] 生成事件: type={}", agentName, eventType);
+        return event;
     }
     
     /**
@@ -180,15 +252,12 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param message 思考内容
      * @param stage 阶段标识（如"llm_streaming"、"knowledge_retrieval"）
      * @return Map<String, Object> 思考事件字典
-     * 
-     * 实现方式：
-     * 1. 调用yieldEvent()
-     * 2. 设置type="agent_thinking"
-     * 3. 添加stage和message字段
      */
     protected Map<String, Object> yieldThinkingEvent(String message, String stage) {
-        // TODO: 实现思考事件推送逻辑
-        return yieldEvent("agent_thinking", Map.of("message", message, "stage", stage));
+        Map<String, Object> data = new HashMap<>();
+        data.put("message", message);
+        data.put("stage", stage);
+        return yieldEvent("agent_thinking", data);
     }
     
     /**
@@ -200,19 +269,22 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param content 知识内容
      * @param message 描述信息（可选，自动生成）
      * @return Map<String, Object> 知识事件字典
-     * 
-     * 实现方式：
-     * 1. 如果message为空，生成默认描述："检索到{knowledgeType}"
-     * 2. 调用yieldEvent()
-     * 3. 设置type="knowledge_retrieved"
-     * 4. 添加knowledge_type、knowledge_content、message字段
      */
     protected Map<String, Object> yieldKnowledgeEvent(
             String knowledgeType, 
             String content, 
             String message) {
-        // TODO: 实现知识事件推送逻辑
-        return yieldEvent("knowledge_retrieved", Map.of("knowledge_type", knowledgeType));
+        
+        String effectiveMessage = (message != null && !message.isEmpty()) 
+                ? message 
+                : "检索到" + knowledgeType;
+        
+        Map<String, Object> data = new HashMap<>();
+        data.put("knowledge_type", knowledgeType);
+        data.put("knowledge_content", content);
+        data.put("message", effectiveMessage);
+        
+        return yieldEvent("knowledge_retrieved", data);
     }
     
     /**
@@ -223,15 +295,16 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param errorMsg 错误信息
      * @param errorType 错误类型（可选，如"LlmCallFailed"、"KnowledgeRetrievalFailed"）
      * @return Map<String, Object> 错误事件字典
-     * 
-     * 实现方式：
-     * 1. 调用yieldEvent()
-     * 2. 设置type="error"
-     * 3. 添加error和error_type字段
      */
     protected Map<String, Object> yieldErrorEvent(String errorMsg, String errorType) {
-        // TODO: 实现错误事件推送逻辑
-        return yieldEvent("error", Map.of("error", errorMsg));
+        Map<String, Object> data = new HashMap<>();
+        data.put("error", errorMsg);
+        if (errorType != null && !errorType.isEmpty()) {
+            data.put("error_type", errorType);
+        }
+        
+        logger.warn("[{}] 生成错误事件: type={}, msg={}", agentName, errorType, errorMsg);
+        return yieldEvent("error", data);
     }
     
     // ==================== 错误处理方法 ====================
@@ -244,15 +317,9 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * @param error 异常对象
      * @param operationName 操作名称（用于日志标识）
      * @return String 错误信息字符串
-     * 
-     * 实现方式：
-     * 1. 构造错误信息："{operationName}失败: {error.getMessage()}"
-     * 2. 使用logger.error()记录完整堆栈
-     * 3. 返回错误信息字符串
      */
     protected String handleException(Exception error, String operationName) {
-        // TODO: 实现异常处理逻辑
-        String errorMsg = operationName + "失败: " + error.getMessage();
+        String errorMsg = String.format("[%s] %s失败: %s", agentName, operationName, error.getMessage());
         logger.error(errorMsg, error);
         return errorMsg;
     }
@@ -264,90 +331,115 @@ public abstract class BaseIntelligentAgent extends AgentBase {
      * 
      * @param text 待解析文本
      * @return Optional<Map<String, Object>> 解析结果或空
-     * 
-     * 实现方式：
-     * 1. 使用Jackson ObjectMapper解析JSON
-     * 2. 成功则返回Optional.of(map)
-     * 3. 失败时记录警告日志，返回Optional.empty()
      */
     protected Optional<Map<String, Object>> safeJsonParse(String text) {
-        // TODO: 实现JSON安全解析逻辑
-        return Optional.empty();
+        try {
+            Map<String, Object> result = JsonUtil.extractAndParseJson(text);
+            return Optional.ofNullable(result);
+        } catch (Exception e) {
+            logger.warn("[{}] JSON解析失败: {}", agentName, e.getMessage());
+            return Optional.empty();
+        }
     }
     
-    // ==================== AgentScope标准接口 ====================
+    // ==================== 抽象方法 ====================
     
     /**
-     * AgentScope标准reply方法（必须实现）
+     * 处理消息并返回响应（核心方法，子类必须实现）
      * 
-     * 功能：处理消息，返回响应
-     * 
-     * @param msg 输入消息（Msg对象）
-     * @return Mono<Msg> 输出消息
-     * 
-     * 实现方式：
-     * 子类必须重写此方法，实现具体业务逻辑
+     * @param input 输入消息内容（JSON格式的Map）
+     * @return Mono<Map<String, Object>> 输出响应
      */
-    @Override
-    public abstract Mono<Msg> reply(Msg msg);
+    public abstract Mono<Map<String, Object>> process(Map<String, Object> input);
+
+    /**
+     * 带追踪的process方法，自动记录输入输出
+     * 
+     * @param input 输入消息
+     * @return Mono<Map<String, Object>> 输出响应
+     */
+    public Mono<Map<String, Object>> processWithTrace(Map<String, Object> input) {
+        // 清空上一次执行的记录
+        executionTrace.get().reset();
+        // 记录输入
+        executionTrace.get().recordInput(input);
+        
+        return process(input)
+                .doOnSuccess(output -> {
+                    // 记录输出
+                    executionTrace.get().recordOutput(output);
+                })
+                .doOnError(error -> {
+                    executionTrace.get().recordError(error.getMessage());
+                });
+    }
+
+    /**
+     * 获取当前执行追踪
+     */
+    public ExecutionTrace getExecutionTrace() {
+        return executionTrace.get();
+    }
+
+    /**
+     * 清理执行追踪
+     */
+    public void clearExecutionTrace() {
+        executionTrace.remove();
+    }
     
     // ==================== 辅助方法 ====================
     
     /**
-     * 构造错误响应消息
-     * 
-     * 功能：创建包含错误信息的Msg对象
+     * 构造错误响应
      * 
      * @param errorMsg 错误信息
-     * @return Msg 错误消息对象
-     * 
-     * 实现方式：
-     * 1. 构造JSON字符串：{"success": false, "error": errorMsg}
-     * 2. 创建Msg对象：name=agentName, role="assistant", content=json
-     * 3. 返回Msg对象
+     * @return Map<String, Object> 错误响应Map
      */
-    protected Msg errorResponse(String errorMsg) {
-        // TODO: 实现错误响应构造逻辑
-        return Msg.builder()
-                .name(agentName)
-                .role("assistant")
-                .content("{\"success\": false, \"error\": \"" + errorMsg + "\"}")
-                .build();
+    protected Map<String, Object> errorResponse(String errorMsg) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", false);
+        response.put("error", errorMsg);
+        response.put("agent", agentName);
+        response.put("timestamp", Instant.now().toString());
+        return response;
     }
     
     /**
-     * 构造成功响应消息
+     * 构造成功响应
      * 
-     * 功能：创建包含成功数据的Msg对象
-     * 
-     * @param data 响应数据（Map）
-     * @return Msg 成功消息对象
-     * 
-     * 实现方式：
-     * 1. 构造JSON字符串：{"success": true, "data": data}
-     * 2. 创建Msg对象：name=agentName, role="assistant", content=json
-     * 3. 返回Msg对象
+     * @param data 响应数据
+     * @return Map<String, Object> 成功响应Map
      */
-    protected Msg successResponse(Map<String, Object> data) {
-        // TODO: 实现成功响应构造逻辑
-        return Msg.builder()
-                .name(agentName)
-                .role("assistant")
-                .content("{\"success\": true}")
-                .build();
+    protected Map<String, Object> successResponse(Map<String, Object> data) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("agent", agentName);
+        response.put("timestamp", Instant.now().toString());
+        if (data != null) {
+            response.putAll(data);
+        }
+        return response;
+    }
+    
+    /**
+     * 获取智能体名称
+     */
+    public String getAgentName() {
+        return agentName;
     }
     
     // ==================== 内部类：LLM响应对象 ====================
     
     /**
-     * LLM响应数据结构
+     * Agent内部使用的LLM响应数据结构
      */
-    protected static class LlmResponse {
+    protected static class AgentLlmResponse {
         private final boolean success;
         private final Map<String, Object> data;
         private final String error;
         
-        public LlmResponse(boolean success, Map<String, Object> data, String error) {
+        public AgentLlmResponse(boolean success, Map<String, Object> data, String error) {
             this.success = success;
             this.data = data;
             this.error = error;
@@ -355,6 +447,66 @@ public abstract class BaseIntelligentAgent extends AgentBase {
         
         public boolean isSuccess() { return success; }
         public Map<String, Object> getData() { return data; }
+        public String getError() { return error; }
+    }
+
+    /**
+     * 执行追踪类，用于记录Agent执行的详细信息
+     */
+    public static class ExecutionTrace {
+        private Map<String, Object> input;
+        private Map<String, Object> output;
+        private String llmInput;
+        private String llmOutput;
+        private Map<String, Object> httpRequest;
+        private Map<String, Object> httpResponse;
+        private String error;
+
+        public void reset() {
+            input = null;
+            output = null;
+            llmInput = null;
+            llmOutput = null;
+            httpRequest = null;
+            httpResponse = null;
+            error = null;
+        }
+
+        public void recordInput(Map<String, Object> input) {
+            this.input = input != null ? new LinkedHashMap<>(input) : null;
+        }
+
+        public void recordOutput(Map<String, Object> output) {
+            this.output = output != null ? new LinkedHashMap<>(output) : null;
+        }
+
+        public void recordLlmInput(String prompt) {
+            this.llmInput = prompt;
+        }
+
+        public void recordLlmOutput(String response) {
+            this.llmOutput = response;
+        }
+
+        public void recordHttpRequest(Map<String, Object> request) {
+            this.httpRequest = request != null ? new LinkedHashMap<>(request) : null;
+        }
+
+        public void recordHttpResponse(Map<String, Object> response) {
+            this.httpResponse = response != null ? new LinkedHashMap<>(response) : null;
+        }
+
+        public void recordError(String error) {
+            this.error = error;
+        }
+
+        // Getters
+        public Map<String, Object> getInput() { return input; }
+        public Map<String, Object> getOutput() { return output; }
+        public String getLlmInput() { return llmInput; }
+        public String getLlmOutput() { return llmOutput; }
+        public Map<String, Object> getHttpRequest() { return httpRequest; }
+        public Map<String, Object> getHttpResponse() { return httpResponse; }
         public String getError() { return error; }
     }
 }
